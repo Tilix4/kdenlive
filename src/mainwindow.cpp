@@ -1239,7 +1239,7 @@ void MainWindow::setupActions()
     addAction(QStringLiteral("zoom_out"), m_zoomOut);
 
     KNS3::standardAction(i18n("Download New Wipes..."), this, SLOT(slotGetNewLumaStuff()), actionCollection(), "get_new_lumas");
-    KNS3::standardAction(i18n("Download New Keyboard Layouts..."), this, SLOT(slotGetNewKeyboardStuff()), actionCollection(), "get_new_keyboardlayouts");
+    KNS3::standardAction(i18n("Download New Keyboard Schemes..."), this, SLOT(slotGetNewKeyboardStuff()), actionCollection(), "get_new_keyboardschemes");
     KNS3::standardAction(i18n("Download New Render Profiles..."), this, SLOT(slotGetNewRenderStuff()), actionCollection(), "get_new_profiles");
     KNS3::standardAction(i18n("Download New Title Templates..."), this, SLOT(slotGetNewTitleStuff()), actionCollection(), "get_new_titles");
 
@@ -3076,7 +3076,7 @@ void MainWindow::slotGetNewLumaStuff()
 
 void MainWindow::slotGetNewKeyboardStuff()
 {
-    if (getNewStuff(QStringLiteral(":data/kdenlive_keyboardlayouts.knsrc")) > 0) {
+    if (getNewStuff(QStringLiteral(":data/kdenlive_keyboardschemes.knsrc")) > 0) {
         //Is there something to do ?
     }
 }
