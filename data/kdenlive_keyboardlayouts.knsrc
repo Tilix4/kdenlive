@@ -1,0 +1,24 @@
+[KNewStuff3]
+Name=Kdenlive Keyboard Layouts
+Name[ca]=Cortinetes de transició del Kdenlive
+Name[ca@valencia]=Cortinetes de transició del Kdenlive
+Name[cs]=Přechod stírání Kdenlive
+Name[en_GB]=Kdenlive Transition Wipes
+Name[es]=Barridos de transición de Kdenlive
+Name[fr]=Configurations de clavier de Kdenlive
+Name[gl]=Borrados de transición de Kdenlive
+Name[it]=Wipe di transizione di Kdenlive
+Name[nl]=Overgangsvegen van Kdenlive
+Name[pl]=Przejścia Kdenlive
+Name[pt]=Varrimentos de Transição do Kdenlive
+Name[sk]=Zahladenia prechodov Kdenlive
+Name[sl]=Obrisi prehodov za Kdenlive
+Name[sv]=Kdenlive-övergångar
+Name[tr]=Kdenlive Geçiş Ekranları
+Name[uk]=Перехідні витирання Kdenlive
+Name[x-test]=xxKdenlive Transition Wipesxx
+Name[zh_CN]=Kdenlive 过渡擦除
+ProvidersUrl=http://download.kde.org/ocs/providers.xml
+Categories=Kdenlive Keyboard Schemes
+TargetDir=kdenlive/shortcuts
+Uncompress=archive
