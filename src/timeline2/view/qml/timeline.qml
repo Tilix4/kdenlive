@@ -47,7 +47,7 @@ Rectangle {
         if (wheel.modifiers & Qt.ControlModifier) {
             timeline.setScaleFactor(timeline.scaleFactor + 0.2 * wheel.angleDelta.y / 120);
         } else {
-            var newScroll = Math.min(scrollView.flickableItem.contentX + wheel.angleDelta.y, timeline.duration * root.timeScale - (scrollView.width - scrollView.__verticalScrollBar.width) + root.projectMargin)
+            var newScroll = Math.min(scrollView.flickableItem.contentX - wheel.angleDelta.y, timeline.duration * root.timeScale - (scrollView.width - scrollView.__verticalScrollBar.width) + root.projectMargin)
             scrollView.flickableItem.contentX = Math.max(newScroll, 0)
         }
     }
@@ -135,8 +135,7 @@ Rectangle {
     //onCurrentTrackChanged: timeline.selection = []
     onTimeScaleChanged: {
         if (root.zoomOnMouse >= 0) {
-            var mouseFraction = 
-            scrollView.flickableItem.contentX = Math.max(0, root.zoomOnMouse * timeline.scaleFactor - tracksArea.mouseX)
+            var mouseFraction = scrollView.flickableItem.contentX = Math.max(0, root.zoomOnMouse * timeline.scaleFactor - tracksArea.mouseX)
             root.zoomOnMouse = -1
         } else {
             scrollView.flickableItem.contentX = Math.max(0, (timeline.seekPosition > -1 ? timeline.seekPosition : timeline.position) * timeline.scaleFactor - (scrollView.width / 2))
@@ -461,6 +460,7 @@ Rectangle {
                         model: multitrack
                         TrackHead {
                             trackName: model.name
+                            trackTag: model.trackTag
                             isMute: model.mute
                             isHidden: model.hidden
                             isComposite: model.composite
@@ -1111,7 +1111,7 @@ Rectangle {
                     text: model.comment
                     font.pixelSize: root.baseUnit
                     x: guideBase.x + 2
-                    y: scrollView.flickableItem.contentY + 20
+                    y: scrollView.flickableItem.contentY
                     color: 'white'
                 }
             }

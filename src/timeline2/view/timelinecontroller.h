@@ -75,6 +75,9 @@ public:
     /* @brief Add a clip id to current selection
      */
     Q_INVOKABLE void addSelection(int newSelection);
+    /* @brief Clear current selection and inform the view
+     */
+    void clearSelection();
     /* @brief returns current timeline's zoom factor
      */
     Q_INVOKABLE double scaleFactor() const;
@@ -249,13 +252,18 @@ public:
     Q_INVOKABLE void removeSpace(int trackId = -1, int frame = -1, bool affectAllTracks = false);
     /* @brief Change a clip status (normal / audio only / video only)
      */
-    Q_INVOKABLE void setClipStatus(int clipId, int status);
+    Q_INVOKABLE void setClipStatus(int clipId, PlaylistState::ClipState status);
 
     Q_INVOKABLE void requestClipCut(int clipId, int position);
 
     Q_INVOKABLE void extract(int clipId);
 
     Q_INVOKABLE void splitAudio(int clipId);
+
+    /* @brief Seeks to selected clip start / end
+     */
+    Q_INVOKABLE void pasteEffects(int targetId, int sourceId);
+
     void switchTrackLock(bool applyToAll = false);
     void switchTargetTrack();
 

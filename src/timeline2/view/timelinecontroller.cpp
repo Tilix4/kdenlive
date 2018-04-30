@@ -198,7 +198,7 @@ void TimelineController::setScaleFactorOnMouse(double scale, bool zoomOnMouse)
         // Don't allow scaling less than full project's width
         scale = (width() - 160.0) / m_duration;
     }*/
-    m_root->setProperty("zoomOnMouse", zoomOnMouse ? getMousePos() : -1);
+    m_root->setProperty("zoomOnMouse", zoomOnMouse ? qMin(getMousePos(), m_duration - TimelineModel::seekDuration) : -1);
     m_scale = scale;
     emit scaleFactorChanged();
 }
@@ -1464,9 +1464,9 @@ void TimelineController::showCompositionKeyframes(int clipId, bool value)
     TimelineFunctions::showCompositionKeyframes(m_model, clipId, value);
 }
 
-void TimelineController::setClipStatus(int clipId, int status)
+void TimelineController::setClipStatus(int clipId, PlaylistState::ClipState status)
 {
-    TimelineFunctions::changeClipState(m_model, clipId, (PlaylistState::ClipState)status);
+    TimelineFunctions::changeClipState(m_model, clipId, status);
 }
 
 void TimelineController::splitAudio(int clipId)
@@ -1547,4 +1547,24 @@ int TimelineController::groupClips(const QList<int> &clipIds)
 bool TimelineController::ungroupClips(int clipId)
 {
     return m_model->requestClipUngroup(clipId);
+}
+
+void TimelineController::clearSelection()
+{
+    if (m_model->m_temporarySelectionGroup >= 0) {
+        m_model->m_groups->destructGroupItem(m_model->m_temporarySelectionGroup);
+        m_model->m_temporarySelectionGroup = -1;
+    }
+    m_selection.selectedItems.clear();
+    emit selectionChanged();
+}
+
+void TimelineController::pasteEffects(int targetId, int sourceId)
+{
+    if (!m_model->isClip(targetId) || !m_model->isClip(sourceId)) {
+        return;
+    }
+    std::shared_ptr<EffectStackModel> sourceStack = m_model->getClipEffectStackModel(sourceId);
+    std::shared_ptr<EffectStackModel> destStack = m_model->getClipEffectStackModel(targetId);
+    destStack->importEffects(sourceStack);
 }

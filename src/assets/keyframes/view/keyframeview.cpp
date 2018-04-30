@@ -160,11 +160,10 @@ void KeyframeView::mousePressEvent(QMouseEvent *event)
         auto keyframe = m_model->getClosestKeyframe(position, &ok);
         if (ok && qAbs(keyframe.first.frames(pCore->getCurrentFps()) - pos) < 5) {
             m_currentKeyframeOriginal = keyframe.first.frames(pCore->getCurrentFps());
-            if (m_model->moveKeyframe(keyframe.first, position, false)) {
-                m_currentKeyframe = pos;
-                emit seekToPos(pos);
-                return;
-            }
+            // Select and seek to keyframe
+            m_currentKeyframe = m_currentKeyframeOriginal;
+            emit seekToPos(m_currentKeyframeOriginal);
+            return;
         }
     }
 
@@ -182,7 +181,7 @@ void KeyframeView::mouseMoveEvent(QMouseEvent *event)
         if (m_currentKeyframe == pos) {
             return;
         }
-        if (m_currentKeyframe >= 0) {
+        if (m_currentKeyframe > 0) {
             if (!m_model->hasKeyframe(pos)) {
                 GenTime currentPos(m_currentKeyframe, pCore->getCurrentFps());
                 if (m_model->moveKeyframe(currentPos, position, false)) {

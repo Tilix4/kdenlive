@@ -75,8 +75,10 @@ AssetParameterModel::AssetParameterModel(Mlt::Properties *asset, const QDomEleme
         QString name = currentParameter.attribute(QStringLiteral("name"));
         QString type = currentParameter.attribute(QStringLiteral("type"));
         QString value = currentParameter.attribute(QStringLiteral("value"));
+        QLocale locale;
         if (value.isNull()) {
-            value = parseAttribute(m_ownerId, QStringLiteral("default"), currentParameter).toString();
+            QVariant defaultValue = parseAttribute(m_ownerId, QStringLiteral("default"), currentParameter);
+            value = defaultValue.type() == QMetaType::Double ? locale.toString(defaultValue.toDouble()) : defaultValue.toString();
         }
         bool isFixed = (type == QLatin1String("fixed"));
         if (isFixed) {
@@ -166,7 +168,7 @@ void AssetParameterModel::setParameter(const QString &name, const int value, boo
     }
 }
 
-void AssetParameterModel::setParameter(const QString &name, const QString &value, bool update)
+void AssetParameterModel::setParameter(const QString &name, const QString &value, bool update, const QModelIndex &paramIndex)
 {
     Q_ASSERT(m_asset->is_valid());
     QLocale locale;
@@ -204,13 +206,17 @@ void AssetParameterModel::setParameter(const QString &name, const QString &value
             emit replugEffect(shared_from_this());
         } else {
             emit modelChanged();
-            emit dataChanged(index(0, 0), index(m_rows.count() - 1, 0), {});
+            if (paramIndex.isValid()) {
+                emit dataChanged(paramIndex, paramIndex, {});
+            } else {
+                emit dataChanged(index(0, 0), index(m_rows.count() - 1, 0), {});
+            }
         }
-        // Update timeline view if necessary
-        pCore->updateItemModel(m_ownerId, m_assetId);
-        pCore->refreshProjectItem(m_ownerId);
-        pCore->invalidateItem(m_ownerId);
     }
+    // Update timeline view if necessary
+    pCore->updateItemModel(m_ownerId, m_assetId);
+    pCore->refreshProjectItem(m_ownerId);
+    pCore->invalidateItem(m_ownerId);
 }
 
 void AssetParameterModel::setParameter(const QString &name, double &value)
@@ -464,8 +470,13 @@ QVector<QPair<QString, QVariant>> AssetParameterModel::getAllParameters() const
 
 void AssetParameterModel::setParameters(const QVector<QPair<QString, QVariant>> &params)
 {
+    QLocale locale;
     for (const auto &param : params) {
-        setParameter(param.first, param.second.toString());
+        if (param.second.type() == QMetaType::Double) {
+            setParameter(param.first, locale.toString(param.second.toDouble()));
+        } else {
+            setParameter(param.first, param.second.toString());
+        }
     }
 }
 

@@ -78,9 +78,14 @@ enum OperationType {
 };
 
 namespace PlaylistState {
+Q_NAMESPACE
+enum ClipState { VideoOnly = 1, AudioOnly = 2, Disabled = 3 };
+Q_ENUM_NS(ClipState)
+} // namespace PlaylistState
 
-enum ClipState { Original = 0, VideoOnly = 1, AudioOnly = 2, Disabled = 3 };
-}
+// returns a pair corresponding to (video, audio)
+std::pair<bool, bool> stateToBool(PlaylistState::ClipState state);
+PlaylistState::ClipState stateFromBool(std::pair<bool, bool> av);
 
 namespace TimelineMode {
 enum EditMode { NormalEdit = 0, OverwriteEdit = 1, InsertEdit = 2 };

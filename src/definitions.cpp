@@ -158,3 +158,19 @@ GroupType groupTypeFromStr(const QString &s)
     Q_ASSERT(false);
     return GroupType::Normal;
 }
+
+std::pair<bool, bool> stateToBool(PlaylistState::ClipState state)
+{
+    return {state == PlaylistState::VideoOnly, state == PlaylistState::AudioOnly};
+}
+PlaylistState::ClipState stateFromBool(std::pair<bool, bool> av)
+{
+    assert(!av.first || !av.second);
+    if (av.first) {
+        return PlaylistState::VideoOnly;
+    } else if (av.second) {
+        return PlaylistState::AudioOnly;
+    } else {
+        return PlaylistState::Disabled;
+    }
+}

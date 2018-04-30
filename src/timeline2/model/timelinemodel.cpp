@@ -555,6 +555,7 @@ bool TimelineModel::requestClipInsertion(const QString &binClipId, int trackId, 
 
 bool TimelineModel::requestClipCreation(const QString &binClipId, int &id, PlaylistState::ClipState state, Fun &undo, Fun &redo)
 {
+    qDebug() << "requestClipCreation " << binClipId;
     int clipId = TimelineModel::getNextId();
     id = clipId;
     Fun local_undo = deregisterClip_lambda(clipId);
@@ -595,23 +596,37 @@ bool TimelineModel::requestClipInsertion(const QString &binClipId, int trackId, 
 {
     std::function<bool(void)> local_undo = []() { return true; };
     std::function<bool(void)> local_redo = []() { return true; };
+    qDebug() << "requestClipInsertion " << binClipId << " "
+             << " " << trackId << " " << position;
     bool res = false;
     if (getTrackById_const(trackId)->isLocked()) {
         return false;
     }
     ClipType type = ClipType::Unknown;
-    if (KdenliveSettings::splitaudio()) {
-        QString bid = binClipId.section(QLatin1Char('/'), 0, 0);
-        if (!pCore->projectItemModel()->hasClip(bid)) {
-            return false;
-        }
-        std::shared_ptr<ProjectClip> master = pCore->projectItemModel()->getClipByBinID(bid);
-        type = master->clipType();
+    QString bid = binClipId.section(QLatin1Char('/'), 0, 0);
+    if (!pCore->projectItemModel()->hasClip(bid)) {
+        return false;
     }
+    std::shared_ptr<ProjectClip> master = pCore->projectItemModel()->getClipByBinID(bid);
+    type = master->clipType();
+
     if (type == ClipType::AV) {
+        if (m_audioTarget >= 0 && m_videoTarget == -1) {
+            // If audio target is set but no video target, only insert audio
+            trackId = m_audioTarget;
+        }
         bool audioDrop = getTrackById_const(trackId)->isAudioTrack();
         res = requestClipCreation(binClipId, id, audioDrop ? PlaylistState::AudioOnly : PlaylistState::VideoOnly, local_undo, local_redo);
         res = res && requestClipMove(id, trackId, position, refreshView, logUndo, local_undo, local_redo);
+        if (m_videoTarget >= 0 && m_audioTarget == -1) {
+            // No audio target defined, only extract video
+            audioDrop = true;
+        } else if (m_audioTarget >= 0) {
+            if (getTrackById_const(m_audioTarget)->isLocked()) {
+                // Audio target locked, only extract video
+                audioDrop = true;
+            }
+        }
         if (res && logUndo && !audioDrop) {
             QList<int> possibleTracks = m_audioTarget >= 0 ? QList<int>() << m_audioTarget : getLowerTracksId(trackId, TrackType::AudioTrack);
             if (possibleTracks.isEmpty()) {
@@ -646,7 +661,8 @@ bool TimelineModel::requestClipInsertion(const QString &binClipId, int trackId, 
             }
         }
     } else {
-        res = requestClipCreation(binClipId, id, PlaylistState::Original, local_undo, local_redo);
+        std::shared_ptr<ProjectClip> binClip = pCore->projectItemModel()->getClipByBinID(binClipId);
+        res = requestClipCreation(binClipId, id, binClip->defaultState(), local_undo, local_redo);
         res = res && requestClipMove(id, trackId, position, refreshView, logUndo, local_undo, local_redo);
     }
     if (!res) {
@@ -809,6 +825,20 @@ bool TimelineModel::requestGroupMove(int clipId, int groupId, int delta_track, i
         }
         return !(track_pos1 <= track_pos2) == !(delta_track <= 0);
     });
+    // Parse all tracks then check none is locked. Maybe find a better way/place to do this
+    QList <int> trackList;
+    for (int clip : sorted_clips) {
+        int current_track_id = getItemTrackId(clip);
+        if (!trackList.contains(current_track_id)) {
+            trackList << current_track_id;
+        }
+    }
+    // Check that the group is not on a locked track
+    for (int tid : trackList) {
+        if (getTrackById_const(tid)->isLocked()) {
+            return false;
+        }
+    }
     for (int clip : sorted_clips) {
         int current_track_id = getItemTrackId(clip);
         int current_track_position = getTrackPosition(current_track_id);
@@ -1018,8 +1048,10 @@ int TimelineModel::requestClipsGroup(const std::unordered_set<int> &ids, bool lo
     Fun undo = []() { return true; };
     Fun redo = []() { return true; };
     if (m_temporarySelectionGroup > -1) {
-        int firstChild = *m_groups->getDirectChildren(m_temporarySelectionGroup).begin();
-        requestClipUngroup(firstChild, undo, redo);
+        m_groups->destructGroupItem(m_temporarySelectionGroup);
+        // We don't log in undo the selection changes
+        //int firstChild = *m_groups->getDirectChildren(m_temporarySelectionGroup).begin();
+        //requestClipUngroup(firstChild, undo, redo);
         m_temporarySelectionGroup = -1;
     }
     int result = requestClipsGroup(ids, undo, redo, type);
@@ -2098,6 +2130,10 @@ bool TimelineModel::requestClipTimeWarp(int clipId, int trackId, int blankSpace,
     }
     if (success) {
         success = getTrackById(trackId)->requestClipInsertion(clipId, oldPos, true, true, local_undo, local_redo);
+        if (!success) {
+            local_undo();
+            return false;
+        }
     }
     PUSH_LAMBDA(local_undo, undo);
     PUSH_LAMBDA(local_redo, redo);
@@ -2114,7 +2150,7 @@ bool TimelineModel::changeItemSpeed(int clipId, int speed)
     // Check if clip has a split partner
     bool result = true;
     if (trackId != -1) {
-        int blankSpace = getTrackById(trackId)->getBlankSizeNearClip(clipId, true);
+        int blankSpace = getTrackById(trackId)->getBlankSizeNearClip(clipId, true) + getClipPlaytime(clipId) - 1;
         splitId = m_groups->getSplitPartner(clipId);
         bool success = true;
         if (splitId > -1) {
@@ -2151,4 +2187,30 @@ bool TimelineModel::changeItemSpeed(int clipId, int speed)
         return true;
     }
     return false;
+}
+
+
+const QString TimelineModel::getTrackTagById(int trackId) const
+{
+    Q_ASSERT(isTrack(trackId));
+    bool isAudio = getTrackById_const(trackId)->isAudioTrack();
+    int count = 1;
+    int totalAudio = 2;
+    auto it = m_allTracks.begin();
+    bool found = false;
+    while ((isAudio || !found) && it != m_allTracks.end()) {
+        if ((*it)->isAudioTrack()) {
+            totalAudio++;
+            if (isAudio && !found) {
+                count++;
+            }
+        } else if (!isAudio) {
+            count++;
+        }
+        if ((*it)->getId() == trackId) {
+            found = true;
+        }
+        it++;
+    }
+    return isAudio ? QStringLiteral("A%1").arg(totalAudio - count) : QStringLiteral("V%1").arg(count-1);
 }

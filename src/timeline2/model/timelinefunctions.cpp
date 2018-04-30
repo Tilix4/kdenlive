@@ -318,6 +318,8 @@ bool TimelineFunctions::insertSpace(std::shared_ptr<TimelineItemModel> timeline,
                 result = timeline->requestGroupMove(clipId, res, 0, zone.y() - zone.x(), true, true, undo, redo);
                 if (result) {
                     result = timeline->requestClipUngroup(clipId, undo, redo);
+                } else {
+                    pCore->displayMessage(i18n("Cannot move selected group"), ErrorMessage);
                 }
             }
         } else {
@@ -445,7 +447,7 @@ bool TimelineFunctions::changeClipState(std::shared_ptr<TimelineItemModel> timel
         }
         return res;
     };
-    bool result = reverse();
+    bool result = operation();
     if (result) {
         UPDATE_UNDO_REDO_NOLOCK(operation, reverse, undo, redo);
     }
@@ -458,8 +460,10 @@ bool TimelineFunctions::requestSplitAudio(std::shared_ptr<TimelineItemModel> tim
     std::function<bool(void)> redo = []() { return true; };
     const std::unordered_set<int> clips = timeline->getGroupElements(clipId);
     bool done = false;
+    // Now clear selection so we don't mess with groups
+    pCore->clearSelection();
     for (int cid : clips) {
-        if (!timeline->getClipPtr(cid)->hasAudio() || timeline->getClipPtr(cid)->clipState() == PlaylistState::AudioOnly) {
+        if (!timeline->getClipPtr(cid)->audioEnabled() || timeline->getClipPtr(cid)->clipState() == PlaylistState::AudioOnly) {
             // clip without audio or audio only, skip
             continue;
         }

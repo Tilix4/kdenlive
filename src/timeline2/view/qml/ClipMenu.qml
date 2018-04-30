@@ -1,5 +1,6 @@
 import QtQuick 2.6
 import QtQuick.Controls 1.4 as OLD
+import com.enums 1.0
 
 OLD.Menu {
         id: clipMenu
@@ -39,13 +40,18 @@ OLD.Menu {
             text: i18n('Copy')
             onTriggered: root.copiedClip = clipId
         }
+        OLD.MenuItem {
+            visible: root.copiedClip != -1 && root.copiedClip != clipId
+            text: i18n('Paste Effects')
+            onTriggered: timeline.pasteEffects(clipId, root.copiedClip)
+        }
         OLD.MenuSeparator {
             visible: true
         }
         OLD.MenuItem {
             text: i18n('Split Audio')
             onTriggered: timeline.splitAudio(clipId)
-            visible: clipStatus == 0
+            visible: clipStatus == ClipState.VideoOnly
         }
         OLD.MenuItem {
             text: i18n('Remove')
@@ -75,37 +81,30 @@ OLD.Menu {
             onTriggered: timeline.triggerAction('cut_timeline_clip')
         }
         OLD.Menu {
-            title: i18n('Clip Type...')
+            title: i18n('Clip Tape...')
             OLD.ExclusiveGroup {
                 id: radioInputGroup
             }
             OLD.MenuItem {
-                text: i18n('Original')
-                checkable: true
-                checked: clipStatus == 0
-                exclusiveGroup: radioInputGroup
-                onTriggered: timeline.setClipStatus(clipId, 0)
-            }
-            OLD.MenuItem {
                 text: i18n('Video Only')
                 checkable: true
-                checked: clipStatus == 1
+                checked: clipStatus == ClipState.VideoOnly
                 exclusiveGroup: radioInputGroup
-                onTriggered: timeline.setClipStatus(clipId, 1)
+                onTriggered: timeline.setClipStatus(clipId, ClipState.VideoOnly)
             }
             OLD.MenuItem {
                 text: i18n('Audio Only')
                 checkable: true
-                checked: clipStatus == 2
+                checked: clipStatus == ClipState.AudioOnly
                 exclusiveGroup: radioInputGroup
-                onTriggered: timeline.setClipStatus(clipId, 2)
+                onTriggered: timeline.setClipStatus(clipId, ClipState.AudioOnly)
             }
             OLD.MenuItem {
                 text: i18n('Disabled')
                 checkable: true
-                checked: clipStatus == 3
+                checked: clipStatus == ClipState.Disabled
                 exclusiveGroup: radioInputGroup
-                onTriggered: timeline.setClipStatus(clipId, 3)
+                onTriggered: timeline.setClipStatus(clipId, ClipState.Disabled)
             }
         }
 }

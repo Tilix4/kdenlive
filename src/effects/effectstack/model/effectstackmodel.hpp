@@ -29,6 +29,7 @@
 #include <QReadWriteLock>
 #include <memory>
 #include <mlt++/Mlt.h>
+#include <unordered_set>
 
 /* @brief This class an effect stack as viewed by the back-end.
    It is responsible for planting and managing effects into the producer it holds a pointer to.
@@ -51,7 +52,6 @@ public:
     */
     static std::shared_ptr<EffectStackModel> construct(std::weak_ptr<Mlt::Service> service, ObjectId ownerId, std::weak_ptr<DocUndoStack> undo_stack);
     void resetService(std::weak_ptr<Mlt::Service> service);
-    void loadEffects();
 
 protected:
     EffectStackModel(std::weak_ptr<Mlt::Service> service, ObjectId ownerId, std::weak_ptr<DocUndoStack> undo_stack);
@@ -59,11 +59,18 @@ protected:
 public:
     /* @brief Add an effect at the bottom of the stack */
     void appendEffect(const QString &effectId, bool makeCurrent = false);
-    /* @brief Copy an existing effect and append it at the bottom of the stack */
-    void copyEffect(std::shared_ptr<AbstractEffectItem> sourceItem);
+    /* @brief Copy an existing effect and append it at the bottom of the stack
+       @param logUndo: if true, an undo/redo is created
+     */
+    void copyEffect(std::shared_ptr<AbstractEffectItem> sourceItem, bool logUndo = true);
     /* @brief Import all effects from the given effect stack
      */
     void importEffects(std::shared_ptr<EffectStackModel> sourceStack);
+    /* @brief Import all effects attached to a given service
+       @param alreadyExist: if true, the effect should be already attached to the service owned by this effectstack (it means we are in the process of loading).
+       In that case, we need to build the stack but not replant the effects
+     */
+    void importEffects(std::weak_ptr<Mlt::Service> service, bool alreadyExist = false);
     bool removeFade(bool fromStart);
 
     /* @brief This function change the global (timeline-wise) enabled state of the effects
@@ -82,7 +89,7 @@ public:
     int getActiveEffect() const;
     /* @brief Adjust an effect duration (useful for fades) */
     bool adjustFadeLength(int duration, bool fromStart, bool audioFade, bool videoFade);
-    bool adjustStackLength(bool adjustFromEnd, int oldIn, int oldDuration, int newIn, int duration, bool hasAudio, bool audioOnly, Fun &undo, Fun &redo, bool logUndo);
+    bool adjustStackLength(bool adjustFromEnd, int oldIn, int oldDuration, int newIn, int duration, Fun &undo, Fun &redo, bool logUndo);
 
     void slotCreateGroup(std::shared_ptr<EffectItemModel> childEffect);
 
@@ -120,19 +127,21 @@ protected:
 
 private:
     mutable QReadWriteLock m_lock;
-    QList<int> fadeIns;
-    QList<int> fadeOuts;
+    std::unordered_set<int> fadeIns;
+    std::unordered_set<int> fadeOuts;
+
     /** @brief: When loading a project, we load filters/effects that are already planted
      *          in the producer, so we shouldn't plant them again. Setting this value to
      *          true will prevent planting in the producer */
     bool m_loadingExisting;
-
 private slots:
     /** @brief: Some effects do not support dynamic changes like sox, and need to be unplugged / replugged on each param change
      */
     void replugEffect(std::shared_ptr<AssetParameterModel> asset);
 
 signals:
+    /** @brief: This signal is connected to the project clip for bin clips and activates the reload of effects on child (timeline) producers
+     */
     void modelChanged();
 };
 

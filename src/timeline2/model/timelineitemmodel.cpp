@@ -195,6 +195,7 @@ QHash<int, QByteArray> TimelineItemModel::roleNames() const
     roles[FileHashRole] = "hash";
     roles[SpeedRole] = "speed";
     roles[HeightRole] = "trackHeight";
+    roles[TrackTagRole] = "trackTag";
     roles[ItemIdRole] = "item";
     roles[ItemATrack] = "a_track";
     roles[HasAudio] = "hasAudio";
@@ -255,7 +256,7 @@ QVariant TimelineItemModel::data(const QModelIndex &index, int role) const
         case AudioLevelsRole:
             return clip->getAudioWaveform();
         case HasAudio:
-            return clip->hasAudio();
+            return clip->audioEnabled();
         case IsAudioRole:
             return clip->isAudioOnly();
         case MarkersRole: {
@@ -265,7 +266,7 @@ QVariant TimelineItemModel::data(const QModelIndex &index, int role) const
             return QVariant::fromValue<KeyframeModel *>(clip->getKeyframeModel());
         }
         case StatusRole:
-            return clip->clipState();
+            return QVariant::fromValue(clip->clipState());
         case StartRole:
             return clip->getPosition();
         case DurationRole:
@@ -309,6 +310,8 @@ QVariant TimelineItemModel::data(const QModelIndex &index, int role) const
             return getTrackById_const(id)->getProperty("hide").toInt() & 1;
         case IsAudioRole:
             return getTrackById_const(id)->getProperty("kdenlive:audio_track").toInt() == 1;
+        case TrackTagRole:
+            return getTrackTagById(id);
         case IsLockedRole:
             return getTrackById_const(id)->getProperty("kdenlive:locked_track").toInt() == 1;
         case HeightRole: {

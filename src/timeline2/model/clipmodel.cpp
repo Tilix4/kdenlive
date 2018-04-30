@@ -35,12 +35,15 @@
 #include "gentime.h"
 #include <effects/effectsrepository.hpp>
 
-ClipModel::ClipModel(std::shared_ptr<TimelineModel> parent, std::shared_ptr<Mlt::Producer> prod, const QString &binClipId, int id)
+ClipModel::ClipModel(std::shared_ptr<TimelineModel> parent, std::shared_ptr<Mlt::Producer> prod, const QString &binClipId, int id,
+                     PlaylistState::ClipState state, double speed)
     : MoveableItem<Mlt::Producer>(parent, id)
     , m_producer(std::move(prod))
     , m_effectStack(EffectStackModel::construct(m_producer, {ObjectType::TimelineClip, m_id}, parent->m_undoStack))
     , m_binClipId(binClipId)
     , forceThumbReload(false)
+    , m_currentState(state)
+    , m_speed(speed)
 {
     m_producer->set("kdenlive:id", binClipId.toUtf8().constData());
     m_producer->set("_kdenlive_cid", m_id);
@@ -54,17 +57,50 @@ ClipModel::ClipModel(std::shared_ptr<TimelineModel> parent, std::shared_ptr<Mlt:
 
 int ClipModel::construct(const std::shared_ptr<TimelineModel> &parent, const QString &binClipId, int id, PlaylistState::ClipState state)
 {
+    id = (id == -1 ? TimelineModel::getNextId() : id);
     std::shared_ptr<ProjectClip> binClip = pCore->projectItemModel()->getClipByBinID(binClipId);
-    std::shared_ptr<Mlt::Producer> cutProducer = binClip->timelineProducer(state);
-    return construct(parent, binClipId, cutProducer, id);
+
+    // We refine the state according to what the clip can actually produce
+    std::pair<bool, bool> videoAudio = stateToBool(state);
+    videoAudio.first = videoAudio.first && binClip->hasVideo();
+    videoAudio.second = videoAudio.second && binClip->hasAudio();
+    state = stateFromBool(videoAudio);
+
+    std::shared_ptr<Mlt::Producer> cutProducer = binClip->getTimelineProducer(id, state, 1.);
+
+    std::shared_ptr<ClipModel> clip(new ClipModel(parent, cutProducer, binClipId, id, state));
+    clip->setClipState(state);
+    parent->registerClip(clip);
+    return id;
 }
 
-int ClipModel::construct(const std::shared_ptr<TimelineModel> &parent, const QString &binClipId, std::shared_ptr<Mlt::Producer> producer, int id)
+int ClipModel::construct(const std::shared_ptr<TimelineModel> &parent, const QString &binClipId, std::shared_ptr<Mlt::Producer> producer,
+                         PlaylistState::ClipState state)
 {
-    std::shared_ptr<ClipModel> clip(new ClipModel(parent, producer, binClipId, id));
-    id = clip->m_id;
+
+    // we hand the producer to the bin clip, and in return we get a cut to a good master producer
+    // We might not be able to use directly the producer that we receive as an argument, because it cannot share the same master producer with any other
+    // clipModel (due to a mlt limitation, see ProjectClip doc)
+
+    int id = (id == -1 ? TimelineModel::getNextId() : id);
+    std::shared_ptr<ProjectClip> binClip = pCore->projectItemModel()->getClipByBinID(binClipId);
+
+    // We refine the state according to what the clip can actually produce
+    std::pair<bool, bool> videoAudio = stateToBool(state);
+    videoAudio.first = videoAudio.first && binClip->hasVideo();
+    videoAudio.second = videoAudio.second && binClip->hasAudio();
+    state = stateFromBool(videoAudio);
+
+    double speed = 1.0;
+    if (QString::fromUtf8(producer->get("mlt_service")) == QLatin1String("timewarp")) {
+        speed = producer->get_double("warp_speed");
+    }
+    auto result = binClip->giveMasterAndGetTimelineProducer(id, producer, state);
+    std::shared_ptr<ClipModel> clip(new ClipModel(parent, result.first, binClipId, id, state, speed));
+    clip->m_effectStack->importEffects(producer, result.second);
+    clip->setClipState(state);
     parent->registerClip(clip);
-    clip->m_effectStack->loadEffects();
+
     return id;
 }
 
@@ -84,13 +120,11 @@ void ClipModel::deregisterClipToBin()
     binClip->deregisterTimelineClip(m_id);
 }
 
-ClipModel::~ClipModel()
-{
-}
+ClipModel::~ClipModel() {}
 
 bool ClipModel::requestResize(int size, bool right, Fun &undo, Fun &redo, bool logUndo)
 {
-    qDebug()<<"++++++++++ PERFORMAING CLIP RESIZE====";
+    qDebug() << "++++++++++ PERFORMAING CLIP RESIZE====";
     QWriteLocker locker(&m_lock);
     // qDebug() << "RESIZE CLIP" << m_id << "target size=" << size << "right=" << right << "endless=" << m_endlessResize << "total length" <<
     // m_producer->get_length() << "current length" << getPlaytime();
@@ -154,8 +188,10 @@ bool ClipModel::requestResize(int size, bool right, Fun &undo, Fun &redo, bool l
             }
             return false;
         };
-        qDebug()<<"// ADJUSTING EFFECT LENGTH, LOGUNDO "<<logUndo<<", "<<old_in<<"/"<<inPoint<<", "<<m_producer->get_playtime();
-        if (logUndo) adjustEffectLength(right, old_in, inPoint, oldDuration, m_producer->get_playtime(), reverse, operation, logUndo);
+        qDebug() << "// ADJUSTING EFFECT LENGTH, LOGUNDO " << logUndo << ", " << old_in << "/" << inPoint << ", " << m_producer->get_playtime();
+        if (logUndo) {
+            adjustEffectLength(right, old_in, inPoint, oldDuration, m_producer->get_playtime(), reverse, operation, logUndo);
+        }
         UPDATE_UNDO_REDO(operation, reverse, undo, redo);
         return true;
     }
@@ -212,111 +248,90 @@ int ClipModel::getPlaytime() const
 
 void ClipModel::setTimelineEffectsEnabled(bool enabled)
 {
-    READ_LOCK();
+    QWriteLocker locker(&m_lock);
     m_effectStack->setEffectStackEnabled(enabled);
 }
 
 bool ClipModel::addEffect(const QString &effectId)
 {
-    READ_LOCK();
+    QWriteLocker locker(&m_lock);
     m_effectStack->appendEffect(effectId);
     return true;
 }
 
 bool ClipModel::copyEffect(std::shared_ptr<EffectStackModel> stackModel, int rowId)
 {
-    READ_LOCK();
+    QWriteLocker locker(&m_lock);
     m_effectStack->copyEffect(stackModel->getEffectStackRow(rowId));
     return true;
 }
 
 bool ClipModel::importEffects(std::shared_ptr<EffectStackModel> stackModel)
 {
-    READ_LOCK();
+    QWriteLocker locker(&m_lock);
     m_effectStack->importEffects(stackModel);
+    return true;
+}
+
+bool ClipModel::importEffects(std::weak_ptr<Mlt::Service> service)
+{
+    QWriteLocker locker(&m_lock);
+    m_effectStack->importEffects(service);
     return true;
 }
 
 bool ClipModel::removeFade(bool fromStart)
 {
-    READ_LOCK();
+    QWriteLocker locker(&m_lock);
     m_effectStack->removeFade(fromStart);
     return true;
 }
 
 bool ClipModel::adjustEffectLength(bool adjustFromEnd, int oldIn, int newIn, int oldDuration, int duration, Fun &undo, Fun &redo, bool logUndo)
 {
-    return m_effectStack->adjustStackLength(adjustFromEnd, oldIn, oldDuration, newIn, duration, hasAudio(), !isAudioOnly(), undo, redo, logUndo);
+    QWriteLocker locker(&m_lock);
+    return m_effectStack->adjustStackLength(adjustFromEnd, oldIn, oldDuration, newIn, duration, undo, redo, logUndo);
 }
 
 bool ClipModel::adjustEffectLength(const QString &effectName, int duration, int originalDuration, Fun &undo, Fun &redo)
 {
-    READ_LOCK();
-    qDebug()<<".... ADJUSTING FADE LENGTH: "<<duration<<" / "<<effectName;
+    QWriteLocker locker(&m_lock);
+    qDebug() << ".... ADJUSTING FADE LENGTH: " << duration << " / " << effectName;
     Fun operation = [this, duration, effectName]() {
-        return m_effectStack->adjustFadeLength(duration, effectName == QLatin1String("fadein") || effectName == QLatin1String("fade_to_black"), hasAudio(), !isAudioOnly());
+        return m_effectStack->adjustFadeLength(duration, effectName == QLatin1String("fadein") || effectName == QLatin1String("fade_to_black"), audioEnabled(),
+                                               !isAudioOnly());
     };
     if (operation() && originalDuration > 0) {
         Fun reverse = [this, originalDuration, effectName]() {
-            return m_effectStack->adjustFadeLength(originalDuration, effectName == QLatin1String("fadein") || effectName == QLatin1String("fade_to_black"), hasAudio(), !isAudioOnly());
+            return m_effectStack->adjustFadeLength(originalDuration, effectName == QLatin1String("fadein") || effectName == QLatin1String("fade_to_black"),
+                                                   audioEnabled(), !isAudioOnly());
         };
-        PUSH_LAMBDA(operation, redo);
-        PUSH_LAMBDA(reverse, undo);
+        UPDATE_UNDO_REDO(operation, reverse, undo, redo);
     }
     return true;
 }
 
-bool ClipModel::hasAudio() const
+bool ClipModel::audioEnabled() const
 {
     READ_LOCK();
-    QString service = getProperty("mlt_service");
-    if (service == QLatin1String("xml")) {
-        // Playlist clip, assume audio
-        return true;
-    }
-    qDebug() << "checking audio:" << service
-             << ((service.contains(QStringLiteral("avformat")) || service == QLatin1String("timewarp")) &&
-                 (getIntProperty(QStringLiteral("audio_index")) > -1));
-    if ((service.contains(QStringLiteral("avformat")) || service == QLatin1String("timewarp")) && (getIntProperty(QStringLiteral("audio_index")) > -1)) {
-        return true;
-    }
-    std::shared_ptr<ProjectClip> binClip = pCore->projectItemModel()->getClipByBinID(m_binClipId);
-    return binClip->hasAudio();
+    return stateToBool(m_currentState).second;
 }
 
 bool ClipModel::isAudioOnly() const
 {
     READ_LOCK();
-    QString service = getProperty("mlt_service");
-    return service.contains(QStringLiteral("avformat")) && (getIntProperty(QStringLiteral("video_index")) == -1);
+    return m_currentState == PlaylistState::AudioOnly;
 }
 
 void ClipModel::refreshProducerFromBin(PlaylistState::ClipState state)
 {
-    if (getProperty("mlt_service") == QLatin1String("timewarp")) {
-        // slowmotion producer, keep it
-        int space = -1;
-        if (m_currentTrackId != -1) {
-            if (auto ptr = m_parent.lock()) {
-                space = ptr->getTrackById(m_currentTrackId)->getBlankSizeNearClip(m_id, true);
-            } else {
-                qDebug() << "Error : Moving clip failed because parent timeline is not available anymore";
-                Q_ASSERT(false);
-            }
-        }
-        std::function<bool(void)> local_undo = []() { return true; };
-        std::function<bool(void)> local_redo = []() { return true; };
-        useTimewarpProducer(m_producer->get_double("warp_speed"), space, local_undo, local_redo);
-        return;
-    }
     QWriteLocker locker(&m_lock);
     int in = getIn();
     int out = getOut();
     std::shared_ptr<ProjectClip> binClip = pCore->projectItemModel()->getClipByBinID(m_binClipId);
-    std::shared_ptr<Mlt::Producer> binProducer = binClip->timelineProducer(state, m_currentTrackId);
+    std::shared_ptr<Mlt::Producer> binProducer = binClip->getTimelineProducer(m_id, state, m_speed);
     m_producer = std::move(binProducer);
     m_producer->set_in_and_out(in, out);
-    // m_producer.reset(binProducer->cut(in, out));
     // replant effect stack in updated service
     m_effectStack->resetService(m_producer);
     m_producer->set("kdenlive:id", binClip->AbstractProjectItem::clipId().toUtf8().constData());
@@ -324,65 +339,46 @@ void ClipModel::refreshProducerFromBin(PlaylistState::ClipState state)
     m_endlessResize = !binClip->hasLimitedDuration();
 }
 
+void ClipModel::refreshProducerFromBin()
+{
+    refreshProducerFromBin(m_currentState);
+}
 
 bool ClipModel::useTimewarpProducer(double speed, int extraSpace, Fun &undo, Fun &redo)
 {
+    if (m_endlessResize) {
+        // no timewarp for endless producers
+        return false;
+    }
+    std::function<bool(void)> local_undo = []() { return true; };
+    std::function<bool(void)> local_redo = []() { return true; };
     double previousSpeed = getSpeed();
-    auto operation = useTimewarpProducer_lambda(speed, extraSpace);
+    int new_in = int(double(getIn()) * previousSpeed / speed);
+    int new_out = int(double(getOut()) * previousSpeed / speed);
+    auto operation = useTimewarpProducer_lambda(speed);
     if (operation()) {
-        auto reverse = useTimewarpProducer_lambda(previousSpeed, extraSpace);
-        UPDATE_UNDO_REDO(operation, reverse, undo, redo);
+        auto reverse = useTimewarpProducer_lambda(previousSpeed);
+        UPDATE_UNDO_REDO(operation, reverse, local_undo, local_redo);
+        bool res = requestResize(new_out - new_in + 1, true, local_undo, local_redo, true);
+        if (!res) {
+            bool undone = local_undo();
+            Q_ASSERT(undone);
+            return false;
+        }
+        UPDATE_UNDO_REDO(local_redo, local_undo, undo, redo);
         return true;
     }
     return false;
 }
 
-Fun ClipModel::useTimewarpProducer_lambda(double speed, int extraSpace)
+Fun ClipModel::useTimewarpProducer_lambda(double speed)
 {
-    Q_UNUSED(extraSpace)
-
     QWriteLocker locker(&m_lock);
-    // TODO: disable timewarp on color clips
-    int in = getIn();
-    int out = getOut();
-    int warp_in;
-    int warp_out;
-    if (getProperty("mlt_service") == QLatin1String("timewarp")) {
-        // slowmotion producer, get current speed
-        warp_in = m_producer->get_int("warp_in");
-        warp_out = m_producer->get_int("warp_out");
-    } else {
-        // store original in/out
-        warp_in = in;
-        warp_out = out;
-    }
-    qDebug() << "++++\n//// USING TIMEWARP: " << warp_in << "-" << warp_out;
-    in = warp_in / speed;
-    out = warp_out / speed;
-    std::shared_ptr<ProjectClip> binClip = pCore->projectItemModel()->getClipByBinID(m_binClipId);
-    std::shared_ptr<Mlt::Producer> originalProducer = binClip->originalProducer();
-    bool limitedDuration = binClip->hasLimitedDuration();
-
-    return [originalProducer, speed, in, out, warp_in, warp_out, limitedDuration, this]() {
-        if (qFuzzyCompare(speed, 1.0)) {
-            m_producer.reset(originalProducer->cut(in, out));
-        } else {
-            QString resource = QString("timewarp:%1:%2").arg(speed).arg(originalProducer->get("resource"));
-            std::shared_ptr<Mlt::Producer> warpProducer(new Mlt::Producer(*m_producer->profile(), resource.toUtf8().constData()));
-            // Make sure we use a cut so that the source producer in/out are not modified
-            m_producer.reset(warpProducer->cut(0, warpProducer->get_length()));
-            setInOut(in, out);
-        }
-        // replant effect stack in updated service
-        m_effectStack->resetService(m_producer);
-        m_producer->set("kdenlive:id", m_binClipId.toUtf8().constData());
-        m_producer->set("_kdenlive_cid", m_id);
-        m_producer->set("warp_in", warp_in);
-        m_producer->set("warp_out", warp_out);
-        m_endlessResize = !limitedDuration;
+    return [speed, this]() {
+        m_speed = speed;
+        refreshProducerFromBin(m_currentState);
         return true;
     };
-    return []() { return false; };
 }
 
 QVariant ClipModel::getAudioWaveform()
@@ -418,11 +414,7 @@ int ClipModel::fadeOut() const
 
 double ClipModel::getSpeed() const
 {
-    if (getProperty("mlt_service") == QLatin1String("timewarp")) {
-        // slowmotion producer, get current speed
-        return m_producer->parent().get_double("warp_speed");
-    }
-    return 1.0;
+    return m_speed;
 }
 
 KeyframeModel *ClipModel::getKeyframeModel()
@@ -444,25 +436,17 @@ void ClipModel::setShowKeyframes(bool show)
 
 bool ClipModel::setClipState(PlaylistState::ClipState state)
 {
-    if (!getProperty("mlt_service").startsWith(QStringLiteral("avformat"))) {
-        return false;
-    }
-    std::shared_ptr<ProjectClip> binClip = pCore->projectItemModel()->getClipByBinID(m_binClipId);
-    std::shared_ptr<Mlt::Producer> binProducer = binClip->timelineProducer(state, m_currentTrackId);
-    int in = getIn();
-    int out = getOut();
-    m_producer = std::move(binProducer);
-    m_producer->set_in_and_out(in, out);
-    m_producer->set("kdenlive:id", m_binClipId.toUtf8().constData());
-    m_producer->set("_kdenlive_cid", m_id);
-
-    // replant effect stack in updated service
-    m_effectStack->resetService(m_producer);
+    QWriteLocker locker(&m_lock);
+    refreshProducerFromBin(state);
+    m_currentState = state;
     return true;
 }
 
 PlaylistState::ClipState ClipModel::clipState() const
 {
+    READ_LOCK();
+    return m_currentState;
+    /*
     if (service()->parent().get_int("audio_index") == -1) {
         if (service()->parent().get_int("video_index") == -1) {
             return PlaylistState::Disabled;
@@ -473,10 +457,12 @@ PlaylistState::ClipState ClipModel::clipState() const
         return PlaylistState::AudioOnly;
     }
     return PlaylistState::Original;
+    */
 }
 
-void ClipModel::passTimelineProperties(std::shared_ptr <ClipModel> other)
+void ClipModel::passTimelineProperties(std::shared_ptr<ClipModel> other)
 {
+    READ_LOCK();
     Mlt::Properties source(m_producer->get_properties());
     Mlt::Properties dest(other->service()->get_properties());
     dest.pass_list(source, "kdenlive:hide_keyframes,kdenlive:activeeffect");
