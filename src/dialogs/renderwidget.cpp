@@ -25,7 +25,7 @@
 #include "profiles/profilerepository.hpp"
 #include "timecode.h"
 #include "ui_saveprofile_ui.h"
-#include "utils/KoIconUtils.h"
+
 
 #include "klocalizedstring.h"
 #include <KColorScheme>
@@ -36,6 +36,7 @@
 #include <KRun>
 #include <kio_version.h>
 #include <knotifications_version.h>
+#include <kns3/downloaddialog.h>
 
 #include "kdenlive_debug.h"
 #include <QDBusConnectionInterface>
@@ -50,8 +51,15 @@
 #include <QThread>
 #include <QTimer>
 #include <QTreeWidgetItem>
+#include <QJsonObject>
+#include <QJsonArray>
 #include <qglobal.h>
 #include <qstring.h>
+
+#ifdef KF5_USE_PURPOSE
+#include <Purpose/AlternativesModel>
+#include <PurposeWidgets/Menu>
+#endif
 
 #include <locale>
 #ifdef Q_OS_MAC
@@ -129,22 +137,22 @@ void RenderJobItem::setStatus(int status)
     m_status = status;
     switch (status) {
     case WAITINGJOB:
-        setIcon(0, KoIconUtils::themedIcon(QStringLiteral("media-playback-pause")));
+        setIcon(0, QIcon::fromTheme(QStringLiteral("media-playback-pause")));
         setData(1, Qt::UserRole, i18n("Waiting..."));
         break;
     case FINISHEDJOB:
         setData(1, Qt::UserRole, i18n("Rendering finished"));
-        setIcon(0, KoIconUtils::themedIcon(QStringLiteral("dialog-ok")));
+        setIcon(0, QIcon::fromTheme(QStringLiteral("dialog-ok")));
         setData(1, ProgressRole, 100);
         break;
     case FAILEDJOB:
         setData(1, Qt::UserRole, i18n("Rendering crashed"));
-        setIcon(0, KoIconUtils::themedIcon(QStringLiteral("dialog-close")));
+        setIcon(0, QIcon::fromTheme(QStringLiteral("dialog-close")));
         setData(1, ProgressRole, 100);
         break;
     case ABORTEDJOB:
         setData(1, Qt::UserRole, i18n("Rendering aborted"));
-        setIcon(0, KoIconUtils::themedIcon(QStringLiteral("dialog-cancel")));
+        setIcon(0, QIcon::fromTheme(QStringLiteral("dialog-cancel")));
         setData(1, ProgressRole, 100);
     default:
         break;
@@ -180,22 +188,26 @@ RenderWidget::RenderWidget(const QString &projectfolder, bool enableProxy, QWidg
     m_view.buttonEdit->setIconSize(iconSize);
     m_view.buttonSave->setIconSize(iconSize);
     m_view.buttonFavorite->setIconSize(iconSize);
+    m_view.buttonDownload->setIconSize(iconSize);
 
-    m_view.buttonDelete->setIcon(KoIconUtils::themedIcon(QStringLiteral("trash-empty")));
+    m_view.buttonDelete->setIcon(QIcon::fromTheme(QStringLiteral("trash-empty")));
     m_view.buttonDelete->setToolTip(i18n("Delete profile"));
     m_view.buttonDelete->setEnabled(false);
 
-    m_view.buttonEdit->setIcon(KoIconUtils::themedIcon(QStringLiteral("document-edit")));
+    m_view.buttonEdit->setIcon(QIcon::fromTheme(QStringLiteral("document-edit")));
     m_view.buttonEdit->setToolTip(i18n("Edit profile"));
     m_view.buttonEdit->setEnabled(false);
 
-    m_view.buttonSave->setIcon(KoIconUtils::themedIcon(QStringLiteral("document-new")));
+    m_view.buttonSave->setIcon(QIcon::fromTheme(QStringLiteral("document-new")));
     m_view.buttonSave->setToolTip(i18n("Create new profile"));
 
-    m_view.hide_log->setIcon(KoIconUtils::themedIcon(QStringLiteral("go-down")));
+    m_view.hide_log->setIcon(QIcon::fromTheme(QStringLiteral("go-down")));
 
-    m_view.buttonFavorite->setIcon(KoIconUtils::themedIcon(QStringLiteral("favorite")));
+    m_view.buttonFavorite->setIcon(QIcon::fromTheme(QStringLiteral("favorite")));
     m_view.buttonFavorite->setToolTip(i18n("Copy profile to favorites"));
+
+    m_view.buttonDownload->setIcon(QIcon::fromTheme(QStringLiteral("edit-download")));
+    m_view.buttonDownload->setToolTip(i18n("Download New Render Profiles..."));
 
     m_view.out_file->button()->setToolTip(i18n("Select output destination"));
     m_view.advanced_params->setMaximumHeight(QFontMetrics(font()).lineSpacing() * 5);
@@ -226,18 +238,23 @@ RenderWidget::RenderWidget(const QString &projectfolder, bool enableProxy, QWidg
     m_view.checkTwoPass->setEnabled(false);
     m_view.proxy_render->setHidden(!enableProxy);
     connect(m_view.proxy_render, &QCheckBox::toggled, this, &RenderWidget::slotProxyWarn);
-    KColorScheme scheme(palette().currentColorGroup(), KColorScheme::Window, KSharedConfig::openConfig(KdenliveSettings::colortheme()));
+    KColorScheme scheme(palette().currentColorGroup(), KColorScheme::Window);
     QColor bg = scheme.background(KColorScheme::NegativeBackground).color();
     m_view.errorBox->setStyleSheet(
         QStringLiteral("QGroupBox { background-color: rgb(%1, %2, %3); border-radius: 5px;}; ").arg(bg.red()).arg(bg.green()).arg(bg.blue()));
     int height = QFontInfo(font()).pixelSize();
-    m_view.errorIcon->setPixmap(KoIconUtils::themedIcon(QStringLiteral("dialog-warning")).pixmap(height, height));
+    m_view.errorIcon->setPixmap(QIcon::fromTheme(QStringLiteral("dialog-warning")).pixmap(height, height));
     m_view.errorBox->setHidden(true);
 
     m_infoMessage = new KMessageWidget;
     m_view.info->addWidget(m_infoMessage);
     m_infoMessage->setCloseButtonVisible(false);
     m_infoMessage->hide();
+
+    m_jobInfoMessage = new KMessageWidget;
+    m_view.jobInfo->addWidget(m_jobInfoMessage);
+    m_jobInfoMessage->setCloseButtonVisible(false);
+    m_jobInfoMessage->hide();
 
     m_view.encoder_threads->setMinimum(0);
     m_view.encoder_threads->setMaximum(QThread::idealThreadCount());
@@ -248,7 +265,7 @@ RenderWidget::RenderWidget(const QString &projectfolder, bool enableProxy, QWidg
     m_view.rescale_keep->setChecked(KdenliveSettings::rescalekeepratio());
     connect(m_view.rescale_width, static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged), this, &RenderWidget::slotUpdateRescaleWidth);
     connect(m_view.rescale_height, static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged), this, &RenderWidget::slotUpdateRescaleHeight);
-    m_view.rescale_keep->setIcon(KoIconUtils::themedIcon(QStringLiteral("edit-link")));
+    m_view.rescale_keep->setIcon(QIcon::fromTheme(QStringLiteral("edit-link")));
     m_view.rescale_keep->setToolTip(i18n("Preserve aspect ratio"));
     connect(m_view.rescale_keep, &QAbstractButton::clicked, this, &RenderWidget::slotSwitchAspectRatio);
 
@@ -277,6 +294,7 @@ RenderWidget::RenderWidget(const QString &projectfolder, bool enableProxy, QWidg
     connect(m_view.buttonEdit, &QAbstractButton::clicked, this, &RenderWidget::slotEditProfile);
     connect(m_view.buttonDelete, &QAbstractButton::clicked, this, &RenderWidget::slotDeleteProfile);
     connect(m_view.buttonFavorite, &QAbstractButton::clicked, this, &RenderWidget::slotCopyToFavorites);
+    connect(m_view.buttonDownload, &QAbstractButton::clicked, this, &RenderWidget::slotDownloadNewRenderProfiles);
 
     connect(m_view.abort_job, &QAbstractButton::clicked, this, &RenderWidget::slotAbortCurrentJob);
     connect(m_view.start_job, &QAbstractButton::clicked, this, &RenderWidget::slotStartCurrentJob);
@@ -287,8 +305,8 @@ RenderWidget::RenderWidget(const QString &projectfolder, bool enableProxy, QWidg
     connect(m_view.buttonClose2, &QAbstractButton::clicked, this, &QWidget::hide);
     connect(m_view.buttonClose3, &QAbstractButton::clicked, this, &QWidget::hide);
     connect(m_view.rescale, &QAbstractButton::toggled, this, &RenderWidget::setRescaleEnabled);
-    connect(m_view.out_file, SIGNAL(textChanged(QString)), this, SLOT(slotUpdateButtons()));
-    connect(m_view.out_file, SIGNAL(urlSelected(QUrl)), this, SLOT(slotUpdateButtons(QUrl)));
+    connect(m_view.out_file, &KUrlRequester::textChanged, this, static_cast<void(RenderWidget::*)()>(&RenderWidget::slotUpdateButtons));
+    connect(m_view.out_file, &KUrlRequester::urlSelected, this, static_cast<void(RenderWidget::*)(const QUrl&)>(&RenderWidget::slotUpdateButtons));
 
     connect(m_view.formats, &QTreeWidget::currentItemChanged, this, &RenderWidget::refreshParams);
     connect(m_view.formats, &QTreeWidget::itemDoubleClicked, this, &RenderWidget::slotEditItem);
@@ -297,8 +315,8 @@ RenderWidget::RenderWidget(const QString &projectfolder, bool enableProxy, QWidg
     connect(m_view.render_zone, &QAbstractButton::clicked, this, &RenderWidget::slotUpdateGuideBox);
     connect(m_view.render_full, &QAbstractButton::clicked, this, &RenderWidget::slotUpdateGuideBox);
 
-    connect(m_view.guide_end, SIGNAL(activated(int)), this, SLOT(slotCheckStartGuidePosition()));
-    connect(m_view.guide_start, SIGNAL(activated(int)), this, SLOT(slotCheckEndGuidePosition()));
+    connect(m_view.guide_end, static_cast<void(KComboBox::*)(int)>(&KComboBox::activated), this, &RenderWidget::slotCheckStartGuidePosition);
+    connect(m_view.guide_start, static_cast<void(KComboBox::*)(int)>(&KComboBox::activated), this, &RenderWidget::slotCheckEndGuidePosition);
 
     connect(m_view.tc_overlay, &QAbstractButton::toggled, m_view.tc_type, &QWidget::setEnabled);
 
@@ -348,9 +366,40 @@ RenderWidget::RenderWidget(const QString &projectfolder, bool enableProxy, QWidg
         (!interface->isServiceRegistered(QStringLiteral("org.kde.ksmserver")) && !interface->isServiceRegistered(QStringLiteral("org.gnome.SessionManager")))) {
         m_view.shutdown->setEnabled(false);
     }
+
+#ifdef KF5_USE_PURPOSE
+    m_shareMenu = new Purpose::Menu();
+    m_view.shareButton->setMenu(m_shareMenu);
+    m_view.shareButton->setIcon( QIcon::fromTheme(QStringLiteral("document-share")));
+    connect(m_shareMenu, &Purpose::Menu::finished, this, &RenderWidget::slotShareActionFinished);
+#else
+    m_view.shareButton->setEnabled(false);
+#endif
     refreshView();
     focusFirstVisibleItem();
     adjustSize();
+}
+
+void RenderWidget::slotShareActionFinished(const QJsonObject &output, int error, const QString &message)
+{
+#ifdef KF5_USE_PURPOSE
+    m_jobInfoMessage->hide();
+    if (error) {
+        KMessageBox::error(this, i18n("There was a problem sharing the document: %1", message),
+                           i18n("Share"));
+    } else {
+        const QString url = output["url"].toString();
+        if (url.isEmpty()) {
+            m_jobInfoMessage->setMessageType(KMessageWidget::Positive);
+            m_jobInfoMessage->setText(i18n("Document shared successfully"));
+            m_jobInfoMessage->show();
+        } else {
+            KMessageBox::information(this, i18n("You can find the shared document at: <a href=\"%1\">%1</a>", url),
+                                     i18n("Share"), QString(),
+                                     KMessageBox::Notify | KMessageBox::AllowLink);
+        }
+    }
+#endif
 }
 
 QSize RenderWidget::sizeHint() const
@@ -368,6 +417,7 @@ RenderWidget::~RenderWidget()
     delete m_jobsDelegate;
     delete m_scriptsDelegate;
     delete m_infoMessage;
+    delete m_jobInfoMessage;
 }
 
 void RenderWidget::slotEditItem(QTreeWidgetItem *item)
@@ -716,6 +766,29 @@ void RenderWidget::slotCopyToFavorites()
     if (saveProfile(doc.documentElement())) {
         parseProfiles(profileElement.attribute(QStringLiteral("name")));
     }
+}
+
+void RenderWidget::slotDownloadNewRenderProfiles()
+{
+    if (getNewStuff(QStringLiteral(":data/kdenlive_renderprofiles.knsrc")) > 0) {
+        reloadProfiles();
+    }
+}
+
+int RenderWidget::getNewStuff(const QString &configFile)
+{
+    KNS3::Entry::List entries;
+    QPointer<KNS3::DownloadDialog> dialog = new KNS3::DownloadDialog(configFile);
+    if (dialog->exec() != 0) {
+        entries = dialog->changedEntries();
+    }
+    for (const KNS3::Entry &entry : entries) {
+        if (entry.status() == KNS3::Entry::Installed) {
+            qCDebug(KDENLIVE_LOG) << "// Installed files: " << entry.installedFiles();
+        }
+    }
+    delete dialog;
+    return entries.size();
 }
 
 void RenderWidget::slotEditProfile()
@@ -1399,7 +1472,7 @@ void RenderWidget::slotExport(bool scriptExport, int zoneIn, int zoneOut, const 
             } else {
                 renderItem->setData(1, ProgressRole, 0);
                 renderItem->setStatus(WAITINGJOB);
-                renderItem->setIcon(0, KoIconUtils::themedIcon(QStringLiteral("media-playback-pause")));
+                renderItem->setIcon(0, QIcon::fromTheme(QStringLiteral("media-playback-pause")));
                 renderItem->setData(1, Qt::UserRole, i18n("Waiting..."));
                 renderItem->setData(1, ParametersRole, dest);
             }
@@ -1525,8 +1598,8 @@ void RenderWidget::adjustViewToProfile()
 void RenderWidget::refreshView()
 {
     m_view.formats->blockSignals(true);
-    QIcon brokenIcon = KoIconUtils::themedIcon(QStringLiteral("dialog-close"));
-    QIcon warningIcon = KoIconUtils::themedIcon(QStringLiteral("dialog-warning"));
+    QIcon brokenIcon = QIcon::fromTheme(QStringLiteral("dialog-close"));
+    QIcon warningIcon = QIcon::fromTheme(QStringLiteral("dialog-warning"));
 
     KColorScheme scheme(palette().currentColorGroup(), KColorScheme::Window);
     const QColor disabled = scheme.foreground(KColorScheme::InactiveText).color();
@@ -1621,8 +1694,9 @@ void RenderWidget::refreshView()
             if (params.contains(QStringLiteral(" profile=")) || params.startsWith(QLatin1String("profile="))) {
                 // changed in MLT commit d8a3a5c9190646aae72048f71a39ee7446a3bd45
                 // (http://www.mltframework.org/gitweb/mlt.git?p=mltframework.org/mlt.git;a=commit;h=d8a3a5c9190646aae72048f71a39ee7446a3bd45)
-                item->setData(0, ErrorRole, i18n("This render profile uses a 'profile' parameter.<br />Unless you know what you are doing you will probably "
-                                                 "have to change it to 'mlt_profile'."));
+                item->setData(0, ErrorRole,
+                              i18n("This render profile uses a 'profile' parameter.<br />Unless you know what you are doing you will probably "
+                                   "have to change it to 'mlt_profile'."));
                 item->setIcon(0, warningIcon);
                 continue;
             }
@@ -2068,7 +2142,7 @@ void RenderWidget::parseFile(const QString &exportFile, bool editable)
             if (editable) {
                 childitem->setData(0, EditableRole, exportFile);
                 if (exportFile.endsWith(QLatin1String("customprofiles.xml"))) {
-                    childitem->setIcon(0, KoIconUtils::themedIcon(QStringLiteral("favorite")));
+                    childitem->setIcon(0, QIcon::fromTheme(QStringLiteral("favorite")));
                 } else {
                     childitem->setIcon(0, QIcon::fromTheme(QStringLiteral("applications-internet")));
                 }
@@ -2175,7 +2249,7 @@ void RenderWidget::setRenderJob(const QString &dest, int progress)
     item->setData(1, ProgressRole, progress);
     item->setStatus(RUNNINGJOB);
     if (progress == 0) {
-        item->setIcon(0, KoIconUtils::themedIcon(QStringLiteral("media-record")));
+        item->setIcon(0, QIcon::fromTheme(QStringLiteral("media-record")));
         item->setData(1, TimeRole, QDateTime::currentDateTime());
         slotCheckJob();
     } else {
@@ -2218,6 +2292,12 @@ void RenderWidget::setRenderStatus(const QString &dest, int status, const QStrin
         est.append(when.toString(QStringLiteral("hh:mm:ss")));
         QString t = i18n("Rendering finished in %1", est);
         item->setData(1, Qt::UserRole, t);
+
+#ifdef KF5_USE_PURPOSE
+        m_shareMenu->model()->setInputData(QJsonObject{ {QStringLiteral("mimeType"), QMimeDatabase().mimeTypeForFile(item->text(1)).name()}, {QStringLiteral("urls"), QJsonArray({item->text(1)})}});
+        m_shareMenu->model()->setPluginType(QStringLiteral("Export"));
+        m_shareMenu->reload();
+#endif
         QString notif = i18n("Rendering of %1 finished in %2", item->text(1), est);
         KNotification *notify = new KNotification(QStringLiteral("RenderFinished"));
         notify->setText(notif);
@@ -2287,6 +2367,16 @@ void RenderWidget::slotCheckJob()
             m_view.start_job->setEnabled(current->status() == WAITINGJOB);
         }
         activate = true;
+#ifdef KF5_USE_PURPOSE
+        if (current->status() == FINISHEDJOB) {
+            m_shareMenu->model()->setInputData(QJsonObject{ {QStringLiteral("mimeType"), QMimeDatabase().mimeTypeForFile(current->text(1)).name()}, {QStringLiteral("urls"), QJsonArray({current->text(1)})}});
+            m_shareMenu->model()->setPluginType(QStringLiteral("Export"));
+            m_shareMenu->reload();
+            m_view.shareButton->setEnabled(true);
+        } else {
+            m_view.shareButton->setEnabled(false);
+        }
+#endif
     }
     m_view.abort_job->setEnabled(activate);
     /*

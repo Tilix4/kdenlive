@@ -50,6 +50,8 @@ ClipController::ClipController(const QString clipId, std::shared_ptr<Mlt::Produc
     , m_clipType(ClipType::Unknown)
     , m_hasLimitedDuration(true)
     , m_effectStack(producer ? EffectStackModel::construct(producer, {ObjectType::BinClip, clipId.toInt()}, pCore->undoStack()) : nullptr)
+    , m_hasAudio(false)
+    , m_hasVideo(false)
     , m_controllerBinId(clipId)
 {
     if (m_masterProducer && !m_masterProducer->is_valid()) {
@@ -195,10 +197,11 @@ void ClipController::getInfoForProducer()
     } else if (m_service == QLatin1String("qimage") || m_service == QLatin1String("pixbuf")) {
         if (m_path.contains(QLatin1Char('%')) || m_path.contains(QStringLiteral("/.all."))) {
             m_clipType = ClipType::SlideShow;
+            m_hasLimitedDuration = true;
         } else {
             m_clipType = ClipType::Image;
+            m_hasLimitedDuration = false;
         }
-        m_hasLimitedDuration = false;
     } else if (m_service == QLatin1String("colour") || m_service == QLatin1String("color")) {
         m_clipType = ClipType::Color;
         m_hasLimitedDuration = false;
@@ -215,11 +218,15 @@ void ClipController::getInfoForProducer()
         m_clipType = ClipType::WebVfx;
     } else if (m_service == QLatin1String("qtext")) {
         m_clipType = ClipType::QText;
+    } else if (m_service == QLatin1String("blipflash")) {
+        // Mostly used for testing
+        m_clipType = ClipType::AV;
+        m_hasLimitedDuration = true;
     } else {
         m_clipType = ClipType::Unknown;
     }
     if (m_audioIndex > -1 || m_clipType == ClipType::Playlist) {
-        m_audioInfo.reset(new AudioStreamInfo(m_masterProducer.get(), m_audioIndex));
+        m_audioInfo.reset(new AudioStreamInfo(m_masterProducer, m_audioIndex));
     }
 
     if (!m_hasLimitedDuration) {
@@ -322,7 +329,6 @@ void ClipController::updateProducer(const std::shared_ptr<Mlt::Producer> &produc
     qDebug() << "// replace finished: " << binId() << " : " << m_masterProducer->get("resource");
 }
 
-
 const QString ClipController::getStringDuration()
 {
     if (m_masterProducer) {
@@ -333,6 +339,18 @@ const QString ClipController::getStringDuration()
         return m_masterProducer->get_length_time(mlt_time_smpte_df);
     }
     return i18n("Unknown");
+}
+
+int ClipController::getProducerDuration() const
+{
+    if (m_masterProducer) {
+        int playtime = m_masterProducer->get_int("kdenlive:duration");
+        if (playtime <= 0) {
+            return playtime = m_masterProducer->get_length();
+        }
+        return playtime;
+    }
+    return -1;
 }
 
 GenTime ClipController::getPlaytime() const
@@ -510,7 +528,7 @@ void ClipController::resetProducerProperty(const QString &name)
     m_masterProducer->parent().set(name.toUtf8().constData(), (char *)nullptr);
 }
 
-ClipType ClipController::clipType() const
+ClipType::ProducerType ClipController::clipType() const
 {
     return m_clipType;
 }
@@ -538,7 +556,20 @@ bool ClipController::hasAudio() const
 void ClipController::checkAudioVideo()
 {
     m_masterProducer->seek(0);
-    Mlt::Frame *frame = m_masterProducer->get_frame();
+    if (m_masterProducer->get_int("_placeholder") == 1) {
+        // This is a placeholder file, try to guess from its properties
+        QString orig_service = m_masterProducer->get("kdenlive:orig_service");
+        if (orig_service.startsWith(QStringLiteral("avformat"))) {
+            m_hasAudio = m_masterProducer->get_int("audio_index") >= 0;
+            m_hasVideo = m_masterProducer->get_int("video_index") >= 0;
+        } else {
+            // Assume image or text producer
+            m_hasAudio = false;
+            m_hasVideo = true;
+        }
+        return;
+    }
+    QScopedPointer<Mlt::Frame> frame(m_masterProducer->get_frame());
     // test_audio returns 1 if there is NO audio (strange but true at the time this code is written)
     m_hasAudio = frame->get_int("test_audio") == 0;
     m_hasVideo = frame->get_int("test_image") == 0;

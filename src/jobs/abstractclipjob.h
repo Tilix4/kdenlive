@@ -62,6 +62,7 @@ public:
         return m;
     }
 
+    /** @brief Returns the id of the bin clip that this job is working on. */
     const QString clipId() const;
     const QString getErrorMessage() const;
     const QString getLogDetails() const;
@@ -93,6 +94,7 @@ protected:
 signals:
     // send an int between 0 and 100 to reflect computation progress
     void jobProgress(int);
+    void jobCanceled();
 };
 
 #endif

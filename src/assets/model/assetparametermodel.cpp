@@ -32,19 +32,19 @@
 AssetParameterModel::AssetParameterModel(Mlt::Properties *asset, const QDomElement &assetXml, const QString &assetId, ObjectId ownerId, QObject *parent)
     : QAbstractListModel(parent)
     , monitorId(ownerId.first == ObjectType::BinClip ? Kdenlive::ClipMonitor : Kdenlive::ProjectMonitor)
-    , m_xml(assetXml)
     , m_assetId(assetId)
     , m_ownerId(ownerId)
     , m_asset(asset)
 {
     Q_ASSERT(asset->is_valid());
-    QDomNodeList nodeList = m_xml.elementsByTagName(QStringLiteral("parameter"));
+    QDomNodeList nodeList = assetXml.elementsByTagName(QStringLiteral("parameter"));
+    m_hideKeyframesByDefault = assetXml.hasAttribute(QStringLiteral("hideKeyframes"));
 
     bool needsLocaleConversion = false;
     QChar separator, oldSeparator;
     // Check locale
-    if (m_xml.hasAttribute(QStringLiteral("LC_NUMERIC"))) {
-        QLocale locale = QLocale(m_xml.attribute(QStringLiteral("LC_NUMERIC")));
+    if (assetXml.hasAttribute(QStringLiteral("LC_NUMERIC"))) {
+        QLocale locale = QLocale(assetXml.attribute(QStringLiteral("LC_NUMERIC")));
         if (locale.decimalPoint() != QLocale().decimalPoint()) {
             needsLocaleConversion = true;
             separator = QLocale().decimalPoint();
@@ -75,22 +75,28 @@ AssetParameterModel::AssetParameterModel(Mlt::Properties *asset, const QDomEleme
         QString name = currentParameter.attribute(QStringLiteral("name"));
         QString type = currentParameter.attribute(QStringLiteral("type"));
         QString value = currentParameter.attribute(QStringLiteral("value"));
+        ParamRow currentRow;
+        currentRow.type = paramTypeFromStr(type);
+        currentRow.xml = currentParameter;
         QLocale locale;
         if (value.isNull()) {
             QVariant defaultValue = parseAttribute(m_ownerId, QStringLiteral("default"), currentParameter);
-            value = defaultValue.type() == QMetaType::Double ? locale.toString(defaultValue.toDouble()) : defaultValue.toString();
+            value = defaultValue.type() == QVariant::Double ? locale.toString(defaultValue.toDouble()) : defaultValue.toString();
         }
         bool isFixed = (type == QLatin1String("fixed"));
         if (isFixed) {
             m_fixedParams[name] = value;
-        }
-        else if (type == QLatin1String("position")) {
+        } else if (currentRow.type == ParamType::Position) {
             int val = value.toInt();
             if (val < 0) {
                 int in = pCore->getItemIn(m_ownerId);
                 int out = in + pCore->getItemDuration(m_ownerId);
                 val += out;
                 value = QString::number(val);
+            }
+        } else if (currentRow.type == ParamType::KeyframeParam || currentRow.type == ParamType::AnimatedRect) {
+            if (!value.contains(QLatin1Char('='))) {
+                value.prepend(QStringLiteral("%1=").arg(pCore->getItemIn(m_ownerId)));
             }
         }
         if (!name.isEmpty()) {
@@ -102,9 +108,6 @@ AssetParameterModel::AssetParameterModel(Mlt::Properties *asset, const QDomEleme
             // fixed parameters are not displayed so we don't store them.
             continue;
         }
-        ParamRow currentRow;
-        currentRow.type = paramTypeFromStr(type);
-        currentRow.xml = currentParameter;
         currentRow.value = value;
         QString title = currentParameter.firstChildElement(QStringLiteral("name")).text();
         currentRow.name = title.isEmpty() ? name : title;
@@ -128,7 +131,7 @@ void AssetParameterModel::prepareKeyframes()
     if (m_keyframes) return;
     int ix = 0;
     for (const auto &name : m_rows) {
-        if (m_params[name].type == ParamType::KeyframeParam || m_params[name].type == ParamType::AnimatedRect) {
+        if (m_params[name].type == ParamType::KeyframeParam || m_params[name].type == ParamType::AnimatedRect || m_params[name].type == ParamType::Roto_spline) {
             addKeyframeParam(index(ix, 0));
         }
         ix++;
@@ -147,7 +150,7 @@ void AssetParameterModel::setParameter(const QString &name, const int value, boo
     if (update) {
         if (m_assetId.startsWith(QStringLiteral("sox_"))) {
             // Warning, SOX effect, need unplug/replug
-            qDebug()<<"// Warning, SOX effect, need unplug/replug";
+            qDebug() << "// Warning, SOX effect, need unplug/replug";
             QStringList effectParam = {m_assetId.section(QLatin1Char('_'), 1)};
             for (const QString &pName : m_paramOrder) {
                 effectParam << m_asset->get(pName.toUtf8().constData());
@@ -194,7 +197,7 @@ void AssetParameterModel::setParameter(const QString &name, const QString &value
     if (update) {
         if (m_assetId.startsWith(QStringLiteral("sox_"))) {
             // Warning, SOX effect, need unplug/replug
-            qDebug()<<"// Warning, SOX effect, need unplug/replug";
+            qDebug() << "// Warning, SOX effect, need unplug/replug";
             QStringList effectParam = {m_assetId.section(QLatin1Char('_'), 1)};
             for (const QString &pName : m_paramOrder) {
                 effectParam << m_asset->get(pName.toUtf8().constData());
@@ -230,7 +233,7 @@ void AssetParameterModel::setParameter(const QString &name, double &value)
     }
     if (m_assetId.startsWith(QStringLiteral("sox_"))) {
         // Warning, SOX effect, need unplug/replug
-        qDebug()<<"// Warning, SOX effect, need unplug/replug";
+        qDebug() << "// Warning, SOX effect, need unplug/replug";
         QStringList effectParam = {m_assetId.section(QLatin1Char('_'), 1)};
         for (const QString &pName : m_paramOrder) {
             effectParam << m_asset->get(pName.toUtf8().constData());
@@ -238,9 +241,9 @@ void AssetParameterModel::setParameter(const QString &name, double &value)
         m_asset->set("effect", effectParam.join(QLatin1Char(' ')).toUtf8().constData());
         emit replugEffect(shared_from_this());
     } else if (m_assetId == QLatin1String("autotrack_rectangle") || m_assetId.startsWith(QStringLiteral("ladspa"))) {
-            // these effects don't understand param change and need to be rebuild
-            emit replugEffect(shared_from_this());
-        } else {
+        // these effects don't understand param change and need to be rebuild
+        emit replugEffect(shared_from_this());
+    } else {
         emit modelChanged();
     }
     pCore->refreshProjectItem(m_ownerId);
@@ -281,6 +284,10 @@ QVariant AssetParameterModel::data(const QModelIndex &index, int role) const
         return pCore->getItemIn(m_ownerId);
     case ParentDurationRole:
         return pCore->getItemDuration(m_ownerId);
+    case ParentPositionRole:
+         return pCore->getItemPosition(m_ownerId);
+    case HideKeyframesFirstRole:
+        return m_hideKeyframesByDefault;
     case MinRole:
         return parseAttribute(m_ownerId, QStringLiteral("min"), element);
     case MaxRole:
@@ -305,9 +312,7 @@ QVariant AssetParameterModel::data(const QModelIndex &index, int role) const
         return element.attribute(QStringLiteral("alpha")) == QLatin1String("1");
     case ValueRole: {
         QString value(m_asset->get(paramName.toUtf8().constData()));
-        return value.isEmpty() ? (element.attribute(QStringLiteral("value")).isNull() ? parseAttribute(m_ownerId, QStringLiteral("default"), element)
-                                                                                      : element.attribute(QStringLiteral("value")))
-                               : value;
+        return value.isEmpty() ? (element.attribute(QStringLiteral("value")).isNull() ? parseAttribute(m_ownerId, QStringLiteral("default"), element) : element.attribute(QStringLiteral("value"))) : value;
     }
     case ListValuesRole:
         return element.attribute(QStringLiteral("paramlist")).split(QLatin1Char(';'));
@@ -315,6 +320,34 @@ QVariant AssetParameterModel::data(const QModelIndex &index, int role) const
         QDomElement namesElem = element.firstChildElement(QStringLiteral("paramlistdisplay"));
         return i18n(namesElem.text().toUtf8().data()).split(QLatin1Char(','));
     }
+    case List1Role:
+        return parseAttribute(m_ownerId, QStringLiteral("list1"), element);
+    case List2Role:
+        return parseAttribute(m_ownerId, QStringLiteral("list2"), element);
+    case Enum1Role:
+        return parseAttribute(m_ownerId, QStringLiteral("1"), element);
+    case Enum2Role:
+        return parseAttribute(m_ownerId, QStringLiteral("2"), element);
+    case Enum3Role:
+        return parseAttribute(m_ownerId, QStringLiteral("3"), element);
+    case Enum4Role:
+        return parseAttribute(m_ownerId, QStringLiteral("4"), element);
+    case Enum5Role:
+        return parseAttribute(m_ownerId, QStringLiteral("5"), element);
+    case Enum6Role:
+        return parseAttribute(m_ownerId, QStringLiteral("6"), element);
+    case Enum7Role:
+        return parseAttribute(m_ownerId, QStringLiteral("7"), element);
+    case Enum8Role:
+        return parseAttribute(m_ownerId, QStringLiteral("8"), element);
+    case Enum9Role:
+        return parseAttribute(m_ownerId, QStringLiteral("9"), element);
+    case Enum10Role:
+        return parseAttribute(m_ownerId, QStringLiteral("10"), element);
+    case Enum11Role:
+        return parseAttribute(m_ownerId, QStringLiteral("11"), element);
+    case Enum12Role:
+        return parseAttribute(m_ownerId, QStringLiteral("12"), element);
     }
     return QVariant();
 }
@@ -433,17 +466,17 @@ QVariant AssetParameterModel::parseAttribute(const ObjectId owner, const QString
     } else if (type == ParamType::Double) {
         QLocale locale;
         locale.setNumberOptions(QLocale::OmitGroupSeparator);
+        if (attribute == QLatin1String("default")) {
+            int factor = element.attribute(QStringLiteral("factor"), QStringLiteral("1")).toInt();
+            if (factor > 0) {
+                return locale.toDouble(content) / factor;
+            }
+        }
         return locale.toDouble(content);
     }
     if (attribute == QLatin1String("default")) {
         if (type == ParamType::RestrictedAnim) {
             content = getDefaultKeyframes(0, content, true);
-        } else {
-            if (element.hasAttribute(QStringLiteral("factor"))) {
-                QLocale locale;
-                locale.setNumberOptions(QLocale::OmitGroupSeparator);
-                return QVariant(locale.toDouble(content) / locale.toDouble(element.attribute(QStringLiteral("factor"))));
-            }
         }
     }
     return content;
@@ -472,7 +505,7 @@ void AssetParameterModel::setParameters(const QVector<QPair<QString, QVariant>> 
 {
     QLocale locale;
     for (const auto &param : params) {
-        if (param.second.type() == QMetaType::Double) {
+        if (param.second.type() == QVariant::Double) {
             setParameter(param.first, locale.toString(param.second.toDouble()));
         } else {
             setParameter(param.first, param.second.toString());
@@ -502,4 +535,12 @@ std::shared_ptr<KeyframeModelList> AssetParameterModel::getKeyframeModel()
 void AssetParameterModel::resetAsset(Mlt::Properties *asset)
 {
     m_asset.reset(asset);
+}
+
+bool AssetParameterModel::hasMoreThanOneKeyframe() const
+{
+    if (m_keyframes) {
+        return (!m_keyframes->isEmpty() && !m_keyframes->singleKeyframe());
+    }
+    return false;
 }

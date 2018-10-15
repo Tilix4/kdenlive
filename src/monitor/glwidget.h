@@ -19,6 +19,9 @@
 #ifndef GLWIDGET_H
 #define GLWIDGET_H
 
+#include <QApplication>
+#include <QFont>
+#include <QFontMetrics>
 #include <QMutex>
 #include <QOffscreenSurface>
 #include <QOpenGLContext>
@@ -26,9 +29,6 @@
 #include <QOpenGLFunctions>
 #include <QOpenGLShaderProgram>
 #include <QQuickView>
-#include <QApplication>
-#include <QFont>
-#include <QFontMetrics>
 #include <QRect>
 #include <QSemaphore>
 #include <QThread>
@@ -36,6 +36,7 @@
 
 #include "bin/model/markerlistmodel.hpp"
 #include "definitions.h"
+#include "kdenlivesettings.h"
 #include "scopes/sharedframe.h"
 
 class QOpenGLFunctions_3_2_Core;
@@ -45,7 +46,7 @@ class Filter;
 class Producer;
 class Consumer;
 class Profile;
-}
+} // namespace Mlt
 
 class RenderThread;
 class FrameRenderer;
@@ -63,6 +64,7 @@ class GLWidget : public QQuickView, protected QOpenGLFunctions
 public:
     friend class MonitorController;
     friend class Monitor;
+    friend class MonitorProxy;
 
     GLWidget(int id, QObject *parent = nullptr);
     ~GLWidget();
@@ -97,6 +99,8 @@ public:
     /** @brief set to true if we want to emit a QImage of the frame for analysis */
     bool sendFrameForAnalysis;
     void updateGamma();
+    /** @brief delete and rebuild consumer, for example when external display is switched */
+    void resetConsumer(bool fullReset);
     Mlt::Profile *profile();
     void reloadProfile();
     void lockMonitor();
@@ -105,7 +109,7 @@ public:
     void setAudioThumb(int channels = 0, const QVariantList &audioCache = QList<QVariant>());
     int droppedFrames() const;
     void resetDrops();
-    bool checkFrameNumber(int pos);
+    bool checkFrameNumber(int pos, int offset);
     /** @brief Return current timeline position */
     int getCurrentPos() const;
     /** @brief Requests a monitor refresh */
@@ -127,6 +131,8 @@ public:
     void setVolume(double volume);
     /** @brief Returns current producer's duration in frames */
     int duration() const;
+    /** @brief Set a property on the MLT consumer */
+    void setConsumerProperty(const QString &name, const QString &value);
 
 protected:
     void mouseReleaseEvent(QMouseEvent *event) override;
@@ -134,6 +140,7 @@ protected:
     void wheelEvent(QWheelEvent *event) override;
     /** @brief Update producer, should ONLY be called from monitor */
     int setProducer(Mlt::Producer *producer, bool isActive, int position = -1);
+    QString frameToTime(int frames) const;
 
 public slots:
     void seek(int pos);
@@ -142,7 +149,7 @@ public slots:
     void setOffsetX(int x, int max);
     void setOffsetY(int y, int max);
     void slotSwitchAudioOverlay(bool enable);
-    void slotZoomScene(double value);
+    void slotZoom(bool zoomIn);
     void initializeGL();
     void releaseAnalyse();
     void switchPlay(bool play, double speed = 1.0);
@@ -170,6 +177,7 @@ signals:
     void passKeyEvent(QKeyEvent *);
     void panView(const QPoint &diff);
     void seekPosition(int);
+    void consumerPosition(int);
     void activateMonitor();
 
 protected:
@@ -178,9 +186,10 @@ protected:
     Mlt::Producer *m_producer;
     Mlt::Profile *m_monitorProfile;
     QMutex m_mutex;
+    int m_id;
+    int m_rulerHeight;
 
 private:
-    int m_id;
     QRect m_rect;
     QRect m_effectRect;
     GLuint m_texture[3];
@@ -289,132 +298,4 @@ public:
     QOpenGLFunctions_3_2_Core *m_gl32;
     bool sendAudioForAnalysis;
 };
-
-class MonitorProxy : public QObject
-{
-    Q_OBJECT
-    // Q_PROPERTY(int consumerPosition READ consumerPosition NOTIFY consumerPositionChanged)
-    Q_PROPERTY(int position READ position NOTIFY positionChanged)
-    Q_PROPERTY(int seekPosition READ seekPosition WRITE setSeekPosition NOTIFY seekPositionChanged)
-    Q_PROPERTY(int zoneIn READ zoneIn WRITE setZoneIn NOTIFY zoneChanged)
-    Q_PROPERTY(int zoneOut READ zoneOut WRITE setZoneOut NOTIFY zoneChanged)
-    Q_PROPERTY(int rulerHeight READ rulerHeight NOTIFY rulerHeightChanged)
-    Q_PROPERTY(QString markerComment READ markerComment NOTIFY markerCommentChanged)
-public:
-    MonitorProxy(GLWidget *parent)
-        : QObject(parent)
-        , q(parent)
-        , m_position(0)
-        , m_seekPosition(-1)
-        , m_zoneIn(0)
-        , m_zoneOut(-1)
-        , m_rulerHeight(QFontMetrics(QApplication::font()).lineSpacing() * 0.7)
-    {
-    }
-    int seekPosition() const { return m_seekPosition; }
-    int position() const { return m_position; }
-    int rulerHeight() const { return m_rulerHeight; }
-    QString markerComment() const { return m_markerComment; }
-    Q_INVOKABLE void requestSeekPosition(int pos)
-    {
-        q->activateMonitor();
-        m_seekPosition = pos;
-        emit seekPositionChanged();
-        emit seekRequestChanged();
-    }
-    void setPosition(int pos)
-    {
-        m_position = pos;
-        emit positionChanged();
-    }
-    void setMarkerComment(const QString &comment)
-    {
-        if (m_markerComment == comment) {
-            return;
-        }
-        m_markerComment = comment;
-        emit markerCommentChanged();
-    }
-    void setSeekPosition(int pos)
-    {
-        m_seekPosition = pos;
-        emit seekPositionChanged();
-    }
-    void pauseAndSeek(int pos)
-    {
-        q->switchPlay(false);
-        requestSeekPosition(pos);
-    }
-    int zoneIn() const { return m_zoneIn; }
-    int zoneOut() const { return m_zoneOut; }
-    void setZoneIn(int pos)
-    {
-        if (m_zoneIn > 0) {
-            emit removeSnap(m_zoneIn);
-        }
-        m_zoneIn = pos;
-        if (pos > 0) {
-            emit addSnap(pos);
-        }
-        emit zoneChanged();
-    }
-    void setZoneOut(int pos)
-    {
-        if (m_zoneOut > 0) {
-            emit removeSnap(m_zoneOut);
-        }
-        m_zoneOut = pos;
-        if (pos > 0) {
-            emit addSnap(pos);
-        }
-        emit zoneChanged();
-    }
-    Q_INVOKABLE void setZone(int in, int out)
-    {
-        if (m_zoneIn > 0) {
-            emit removeSnap(m_zoneIn);
-        }
-        if (m_zoneOut > 0) {
-            emit removeSnap(m_zoneOut);
-        }
-        m_zoneIn = in;
-        m_zoneOut = out;
-        if (m_zoneIn > 0) {
-            emit addSnap(m_zoneIn);
-        }
-        if (m_zoneOut > 0) {
-            emit addSnap(m_zoneOut);
-        }
-        emit zoneChanged();
-    }
-    void setZone(QPoint zone)
-    {
-        setZone(zone.x(), zone.y());
-    }
-    void resetZone()
-    {
-        m_zoneIn = 0;
-        m_zoneOut = -1;
-    }
-    QPoint zone() const { return QPoint(m_zoneIn, m_zoneOut); }
-signals:
-    void positionChanged();
-    void seekPositionChanged();
-    void seekRequestChanged();
-    void zoneChanged();
-    void markerCommentChanged();
-    void rulerHeightChanged();
-    void addSnap(int);
-    void removeSnap(int);
-
-private:
-    GLWidget *q;
-    int m_position;
-    int m_seekPosition;
-    int m_zoneIn;
-    int m_zoneOut;
-    int m_rulerHeight;
-    QString m_markerComment;
-};
-
 #endif

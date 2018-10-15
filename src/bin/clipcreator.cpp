@@ -21,6 +21,7 @@
 
 #include "clipcreator.hpp"
 #include "core.h"
+#include "bin/bin.h"
 #include "doc/kdenlivedoc.h"
 #include "kdenlivesettings.h"
 #include "klocalizedstring.h"
@@ -36,7 +37,7 @@
 #include <QWindow>
 
 namespace {
-QDomElement createProducer(QDomDocument &xml, ClipType type, const QString &resource, const QString &name, int duration, const QString &service)
+QDomElement createProducer(QDomDocument &xml, ClipType::ProducerType type, const QString &resource, const QString &name, int duration, const QString &service)
 {
     QDomElement prod = xml.createElement(QStringLiteral("producer"));
     xml.appendChild(prod);
@@ -61,7 +62,6 @@ QString ClipCreator::createTitleClip(const std::unordered_map<QString, QString> 
                                      std::shared_ptr<ProjectItemModel> model)
 {
     QDomDocument xml;
-
     auto prod = createProducer(xml, ClipType::Text, QString(), name, duration, QStringLiteral("kdenlivetitle"));
     Xml::addXmlProperties(prod, properties);
 
@@ -85,11 +85,10 @@ QString ClipCreator::createColorClip(const QString &color, int duration, const Q
 QString ClipCreator::createClipFromFile(const QString &path, const QString &parentFolder, std::shared_ptr<ProjectItemModel> model, Fun &undo, Fun &redo)
 {
     QDomDocument xml;
-    QUrl url(path);
     QMimeDatabase db;
-    QMimeType type = db.mimeTypeForUrl(url);
+    QMimeType type = db.mimeTypeForUrl(QUrl::fromLocalFile(path));
 
-    qDebug() << "/////////// createClipFromFile" << path << parentFolder << url << type.name();
+    qDebug() << "/////////// createClipFromFile" << path << parentFolder << path << type.name();
     QDomElement prod;
     if (type.name().startsWith(QLatin1String("image/"))) {
         int duration = pCore->currentDoc()->getFramePos(KdenliveSettings::image_duration());
@@ -97,7 +96,7 @@ QString ClipCreator::createClipFromFile(const QString &path, const QString &pare
     } else if (type.inherits(QStringLiteral("application/x-kdenlivetitle"))) {
         // opening a title file
         QDomDocument txtdoc(QStringLiteral("titledocument"));
-        QFile txtfile(url.toLocalFile());
+        QFile txtfile(path);
         if (txtfile.open(QIODevice::ReadOnly) && txtdoc.setContent(&txtfile)) {
             txtfile.close();
             // extract embedded images
@@ -124,7 +123,7 @@ QString ClipCreator::createClipFromFile(const QString &path, const QString &pare
                 duration = pCore->currentDoc()->getFramePos(KdenliveSettings::title_duration()) - 1;
             }
             prod = createProducer(xml, ClipType::Text, path, QString(), duration, QString());
-            txtdoc.documentElement().setAttribute(QStringLiteral("duration"), duration);
+            txtdoc.documentElement().setAttribute(QStringLiteral("kdenlive:duration"), duration);
             QString titleData = txtdoc.toString();
             prod.setAttribute(QStringLiteral("xmldata"), titleData);
         } else {
@@ -138,7 +137,9 @@ QString ClipCreator::createClipFromFile(const QString &path, const QString &pare
         QMap<QString, QString> properties;
         properties.insert(QStringLiteral("resource"), path);
         Xml::addXmlProperties(prod, properties);
-        qDebug() << "/////////// normal" << url.toLocalFile() << properties << url;
+    }
+    if (pCore->bin()->isEmpty() && (KdenliveSettings::default_profile().isEmpty() || KdenliveSettings::checkfirstprojectclip())) {
+        prod.setAttribute(QStringLiteral("_checkProfile"), 1);
     }
 
     qDebug() << "/////////// final xml" << xml.toString();
@@ -212,25 +213,69 @@ bool ClipCreator::createClipsFromList(const QList<QUrl> &list, bool checkRemovab
     bool created = false;
     QMimeDatabase db;
     for (const QUrl &file : list) {
-        QMimeType type = db.mimeTypeForUrl(file);
-        if (type.inherits(QLatin1String("inode/directory"))) {
+        QMimeType mType = db.mimeTypeForUrl(file);
+        if (mType.inherits(QLatin1String("inode/directory"))) {
             // user dropped a folder, import its files
             QDir dir(file.path());
             QStringList result = dir.entryList(QDir::Files);
+            QStringList subfolders = dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
             QList<QUrl> folderFiles;
+            //QStringList allExtensions = ClipCreationDialog::getExtensions();
             for (const QString &path : result) {
-                folderFiles.append(QUrl::fromLocalFile(dir.absoluteFilePath(path)));
+                QUrl url = QUrl::fromLocalFile(dir.absoluteFilePath(path));
+                // Check file is of a supported type
+                mType = db.mimeTypeForUrl(url);
+                QString mimeAliases = mType.name();
+                bool isValid = mimeAliases.contains(QLatin1String("video/"));
+                if (!isValid) {
+                    isValid = mimeAliases.contains(QLatin1String("audio/"));
+                }
+                if (!isValid) {
+                    isValid = mimeAliases.contains(QLatin1String("image/"));
+                }
+                if (!isValid && (mType.inherits(QLatin1String("video/mlt-playlist")) || mType.inherits(QLatin1String("application/x-kdenlivetitle")))) {
+                    isValid = true;
+                }
+                if (isValid) {
+                    folderFiles.append(url);
+                }
             }
             QString folderId;
             Fun local_undo = []() { return true; };
             Fun local_redo = []() { return true; };
-            bool ok = pCore->projectItemModel()->requestAddFolder(folderId, dir.dirName(), parentFolder, local_undo, local_redo);
-            if (ok) {
-                ok = createClipsFromList(folderFiles, checkRemovable, folderId, model, local_undo, local_redo);
-                if (!ok) {
-                    local_undo();
-                } else {
-                    UPDATE_UNDO_REDO_NOLOCK(local_redo, local_undo, undo, redo);
+            if (folderFiles.isEmpty()) {
+                QList<QUrl> sublist;
+                for(const QString &sub : subfolders) {
+                    QUrl url = QUrl::fromLocalFile(dir.absoluteFilePath(sub));
+                    if (!list.contains(url)) {
+                        sublist << url;
+                    }
+                }
+                if (!sublist.isEmpty()) {
+                    // load subfolders
+                    createClipsFromList(sublist, checkRemovable, parentFolder, model,undo, redo);
+                }
+            } else {
+                bool ok = pCore->projectItemModel()->requestAddFolder(folderId, dir.dirName(), parentFolder, local_undo, local_redo);
+                if (ok) {
+                    ok = createClipsFromList(folderFiles, checkRemovable, folderId, model, local_undo, local_redo);
+                    if (!ok) {
+                        local_undo();
+                    } else {
+                        UPDATE_UNDO_REDO_NOLOCK(local_redo, local_undo, undo, redo);
+                    }
+                    // Check subfolders
+                    QList<QUrl> sublist;
+                    for(const QString &sub : subfolders) {
+                        QUrl url = QUrl::fromLocalFile(dir.absoluteFilePath(sub));
+                        if (!list.contains(url)) {
+                            sublist << url;
+                        }
+                    }
+                    if (!sublist.isEmpty()) {
+                        // load subfolders
+                        createClipsFromList(sublist, checkRemovable, folderId, model,undo, redo);
+                    }
                 }
             }
             continue;

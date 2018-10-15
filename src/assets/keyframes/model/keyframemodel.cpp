@@ -20,11 +20,14 @@
  ***************************************************************************/
 
 #include "keyframemodel.hpp"
+#include "rotoscoping/bpoint.h"
+#include "rotoscoping/rotohelper.hpp"
 #include "core.h"
 #include "doc/docundostack.hpp"
 #include "macros.hpp"
 
 #include <QDebug>
+#include <QJsonDocument>
 #include <mlt++/Mlt.h>
 
 KeyframeModel::KeyframeModel(std::weak_ptr<AssetParameterModel> model, const QModelIndex &index, std::weak_ptr<DocUndoStack> undo_stack, QObject *parent)
@@ -101,7 +104,7 @@ bool KeyframeModel::addKeyframe(int frame, double normalizedValue)
             if (normalizedValue >= 0.5) {
                 realValue = norm + (2 * (normalizedValue - 0.5) * (max / factor - norm));
             } else {
-                realValue = norm - pow(2 * (0.5 - normalizedValue), 10.0/6) * (norm - min / factor);
+                realValue = norm - pow(2 * (0.5 - normalizedValue), 10.0 / 6) * (norm - min / factor);
             }
         } else {
             realValue = (normalizedValue * (max - min) + min) / factor;
@@ -196,7 +199,7 @@ bool KeyframeModel::moveKeyframe(GenTime oldPos, GenTime pos, double newVal, Fun
                     if (newVal >= 0.5) {
                         realValue = norm + (2 * (newVal - 0.5) * (max / factor - norm));
                     } else {
-                        realValue = norm - pow(2 * (0.5 - newVal), 10.0/6) * (norm - min / factor);
+                        realValue = norm - pow(2 * (0.5 - newVal), 10.0 / 6) * (norm - min / factor);
                     }
                 } else {
                     realValue = (newVal * (max - min) + min) / factor;
@@ -234,14 +237,14 @@ bool KeyframeModel::offsetKeyframes(int oldPos, int pos, bool logUndo)
     QWriteLocker locker(&m_lock);
     Fun undo = []() { return true; };
     Fun redo = []() { return true; };
-    QList <GenTime> times;
+    QList<GenTime> times;
     for (const auto &m : m_keyframeList) {
         if (m.first < oldFrame) continue;
         times << m.first;
     }
-    bool res;
+    bool res = true;
     for (const auto &t : times) {
-        res = moveKeyframe(t, t + diff, -1, undo, redo);
+        res &= moveKeyframe(t, t + diff, -1, undo, redo);
     }
     if (res && logUndo) {
         PUSH_UNDO(undo, redo, i18n("Move keyframes"));
@@ -287,6 +290,31 @@ bool KeyframeModel::updateKeyframe(GenTime pos, QVariant value, Fun &undo, Fun &
         UPDATE_UNDO_REDO(operation, reverse, undo, redo);
     }
     return res;
+}
+
+bool KeyframeModel::updateKeyframe(int pos, double newVal)
+{
+    GenTime Pos(pos, pCore->getCurrentFps());
+    if (auto ptr = m_model.lock()) {
+        double min = ptr->data(m_index, AssetParameterModel::MinRole).toDouble();
+        double max = ptr->data(m_index, AssetParameterModel::MaxRole).toDouble();
+        double factor = ptr->data(m_index, AssetParameterModel::FactorRole).toDouble();
+        double norm = ptr->data(m_index, AssetParameterModel::DefaultRole).toDouble();
+        int logRole = ptr->data(m_index, AssetParameterModel::ScaleRole).toInt();
+        double realValue;
+        if (logRole == -1) {
+            // Logarythmic scale for lower than norm values
+            if (newVal >= 0.5) {
+                realValue = norm + (2 * (newVal - 0.5) * (max / factor - norm));
+            } else {
+                realValue = norm - pow(2 * (0.5 - newVal), 10.0 / 6) * (norm - min / factor);
+            }
+        } else {
+            realValue = (newVal * (max - min) + min) / factor;
+        }
+        return updateKeyframe(Pos, realValue);
+    }
+    return false;
 }
 
 bool KeyframeModel::updateKeyframe(GenTime pos, QVariant value)
@@ -579,6 +607,9 @@ bool KeyframeModel::removeAllKeyframes()
 
 QString KeyframeModel::getAnimProperty() const
 {
+    if (m_paramType == ParamType::Roto_spline) {
+        return getRotoProperty();
+    }
     QString prop;
     bool first = true;
     QLocale locale;
@@ -610,6 +641,21 @@ QString KeyframeModel::getAnimProperty() const
         }
     }
     return prop;
+}
+
+QString KeyframeModel::getRotoProperty() const
+{
+    QJsonDocument doc;
+    if (auto ptr = m_model.lock()) {
+        int in = ptr->data(m_index, AssetParameterModel::ParentInRole).toInt();
+        int out = ptr->data(m_index, AssetParameterModel::ParentDurationRole).toInt();
+        QMap<QString, QVariant> map;
+        for (const auto keyframe : m_keyframeList) {
+            map.insert(QString::number(in + keyframe.first.frames(pCore->getCurrentFps())).rightJustified(log10((double)out) + 1, '0'), keyframe.second.second);
+        }
+        doc = QJsonDocument::fromVariant(QVariant(map));
+    }
+    return doc.toJson();
 }
 
 mlt_keyframe_type convertToMltType(KeyframeType type)
@@ -648,14 +694,14 @@ void KeyframeModel::parseAnimProperty(const QString &prop)
         }
         QVariant value;
         switch (m_paramType) {
-            case ParamType::AnimatedRect: {
-                mlt_rect rect = mlt_prop.anim_get_rect("key", frame);
-                value = QVariant(QStringLiteral("%1 %2 %3 %4 %5").arg(rect.x).arg(rect.y).arg(rect.w).arg(rect.h).arg(rect.o));
-                break;
-            }
-            default:
-                value = QVariant(mlt_prop.anim_get_double("key", frame));
-                break;
+        case ParamType::AnimatedRect: {
+            mlt_rect rect = mlt_prop.anim_get_rect("key", frame);
+            value = QVariant(QStringLiteral("%1 %2 %3 %4 %5").arg(rect.x).arg(rect.y).arg(rect.w).arg(rect.h).arg(rect.o));
+            break;
+        }
+        default:
+            value = QVariant(mlt_prop.anim_get_double("key", frame));
+            break;
         }
         addKeyframe(GenTime(frame, pCore->getCurrentFps()), convertFromMltType(type), value, false, undo, redo);
     }
@@ -688,6 +734,25 @@ void KeyframeModel::parseAnimProperty(const QString &prop)
     */
 }
 
+void KeyframeModel::parseRotoProperty(const QString &prop)
+{
+    Fun undo = []() { return true; };
+    Fun redo = []() { return true; };
+
+    QJsonParseError jsonError;
+    QJsonDocument doc = QJsonDocument::fromJson(prop.toLatin1(), &jsonError);
+    QVariant data = doc.toVariant();
+    if (data.canConvert(QVariant::Map)) {
+        QList<int> keyframes;
+        QMap<QString, QVariant> map = data.toMap();
+        QMap<QString, QVariant>::const_iterator i = map.constBegin();
+        while (i != map.constEnd()) {
+            addKeyframe(GenTime(i.key().toInt(), pCore->getCurrentFps()), KeyframeType::Linear, i.value(), false, undo, redo);
+            ++i;
+        }
+    }
+}
+
 QVariant KeyframeModel::getInterpolatedValue(int p) const
 {
     auto pos = GenTime(p, pCore->getCurrentFps());
@@ -696,9 +761,11 @@ QVariant KeyframeModel::getInterpolatedValue(int p) const
 
 QVariant KeyframeModel::getInterpolatedValue(const GenTime &pos) const
 {
-    int p = pos.frames(pCore->getCurrentFps());
     if (m_keyframeList.count(pos) > 0) {
         return m_keyframeList.at(pos).second;
+    }
+    if (m_keyframeList.size() == 0) {
+        return QVariant();
     }
     auto next = m_keyframeList.upper_bound(pos);
     if (next == m_keyframeList.cbegin()) {
@@ -713,6 +780,7 @@ QVariant KeyframeModel::getInterpolatedValue(const GenTime &pos) const
     // We now have surrounding keyframes, we use mlt to compute the value
     Mlt::Properties prop;
     QLocale locale;
+    int p = pos.frames(pCore->getCurrentFps());
     if (m_paramType == ParamType::KeyframeParam) {
         prop.anim_set("keyframe", prev->second.second.toDouble(), prev->first.frames(pCore->getCurrentFps()), next->first.frames(pCore->getCurrentFps()),
                       convertToMltType(prev->second.first));
@@ -720,9 +788,9 @@ QVariant KeyframeModel::getInterpolatedValue(const GenTime &pos) const
                       convertToMltType(next->second.first));
         return QVariant(prop.anim_get_double("keyframe", p));
     } else if (m_paramType == ParamType::AnimatedRect) {
-        mlt_rect rect;
         QStringList vals = prev->second.second.toString().split(QLatin1Char(' '));
         if (vals.count() >= 4) {
+            mlt_rect rect;
             rect.x = vals.at(0).toInt();
             rect.y = vals.at(1).toInt();
             rect.w = vals.at(2).toInt();
@@ -732,11 +800,12 @@ QVariant KeyframeModel::getInterpolatedValue(const GenTime &pos) const
             } else {
                 rect.o = 1;
             }
-        }
-        prop.anim_set("keyframe", rect, prev->first.frames(pCore->getCurrentFps()), next->first.frames(pCore->getCurrentFps()),
+            prop.anim_set("keyframe", rect, prev->first.frames(pCore->getCurrentFps()), next->first.frames(pCore->getCurrentFps()),
                       convertToMltType(prev->second.first));
+        }
         vals = next->second.second.toString().split(QLatin1Char(' '));
         if (vals.count() >= 4) {
+            mlt_rect rect;
             rect.x = vals.at(0).toInt();
             rect.y = vals.at(1).toInt();
             rect.w = vals.at(2).toInt();
@@ -746,12 +815,34 @@ QVariant KeyframeModel::getInterpolatedValue(const GenTime &pos) const
             } else {
                 rect.o = 1;
             }
-        }
-        prop.anim_set("keyframe", rect, next->first.frames(pCore->getCurrentFps()), next->first.frames(pCore->getCurrentFps()),
+            prop.anim_set("keyframe", rect, next->first.frames(pCore->getCurrentFps()), next->first.frames(pCore->getCurrentFps()),
                       convertToMltType(next->second.first));
-        rect = prop.anim_get_rect("keyframe", p);
+        }
+        mlt_rect rect = prop.anim_get_rect("keyframe", p);
         const QString res = QStringLiteral("%1 %2 %3 %4 %5").arg((int)rect.x).arg((int)rect.y).arg((int)rect.w).arg((int)rect.h).arg(rect.o);
         return QVariant(res);
+    } else if (m_paramType == ParamType::Roto_spline) {
+        // interpolate
+        QSize frame = pCore->getCurrentFrameSize();
+        QList<BPoint> p1 = RotoHelper::getPoints(prev->second.second, frame);
+        qreal relPos = (p - prev->first.frames(pCore->getCurrentFps())) / (qreal)(((next->first - prev->first).frames(pCore->getCurrentFps())) + 1);
+        QList<BPoint> p2 = RotoHelper::getPoints(next->second.second, frame);
+        int count = qMin(p1.count(), p2.count());
+        QList<QVariant> vlist;
+        for (int i = 0; i < count; ++i) {
+            BPoint bp;
+            QList<QVariant> pl;
+            for (int j = 0; j < 3; ++j) {
+                if (p1.at(i)[j] != p2.at(i)[j]) {
+                    bp[j] = QLineF(p1.at(i)[j], p2.at(i)[j]).pointAt(relPos);
+                } else {
+                    bp[j] = p1.at(i)[j];
+                }
+                pl << QVariant(QList<QVariant>() << QVariant(bp[j].x() / frame.width()) << QVariant(bp[j].y() / frame.height()));
+            }
+            vlist << QVariant(pl);
+        }
+        return vlist;
     }
     return QVariant();
 }
@@ -762,7 +853,7 @@ void KeyframeModel::sendModification()
         Q_ASSERT(m_index.isValid());
         QString name = ptr->data(m_index, AssetParameterModel::NameRole).toString();
         QString data;
-        if (m_paramType == ParamType::KeyframeParam || m_paramType == ParamType::AnimatedRect) {
+        if (m_paramType == ParamType::KeyframeParam || m_paramType == ParamType::AnimatedRect || m_paramType == ParamType::Roto_spline) {
             data = getAnimProperty();
             ptr->setParameter(name, data);
         } else {
@@ -785,6 +876,8 @@ void KeyframeModel::refresh()
         if (m_paramType == ParamType::KeyframeParam || m_paramType == ParamType::AnimatedRect) {
             qDebug() << "parsing keyframe" << data;
             parseAnimProperty(data);
+        } else if (m_paramType == ParamType::Roto_spline) {
+            parseRotoProperty(data);
         } else {
             // first, try to convert to double
             bool ok = false;

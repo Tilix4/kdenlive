@@ -25,6 +25,7 @@
 #include "definitions.h"
 #include "timeline2/model/timelineitemmodel.hpp"
 #include "timelinewidget.h"
+#include "lib/audio/audioCorrelation.h"
 
 class PreviewManager;
 class QAction;
@@ -42,6 +43,7 @@ class TimelineController : public QObject
     /* @brief holds the current project duration
      */
     Q_PROPERTY(int duration READ duration NOTIFY durationChanged)
+    Q_PROPERTY(int fullDuration READ fullDuration NOTIFY durationChanged)
     Q_PROPERTY(bool audioThumbFormat READ audioThumbFormat NOTIFY audioThumbFormatChanged)
     /* @brief holds the current timeline position
      */
@@ -63,21 +65,33 @@ class TimelineController : public QObject
     Q_PROPERTY(int videoTarget READ videoTarget WRITE setVideoTarget NOTIFY videoTargetChanged)
 
 public:
-    TimelineController(KActionCollection *actionCollection, QObject *parent);
+    TimelineController(QObject *parent);
     virtual ~TimelineController();
-    /* @brief Sets the model that this widgets displays */
+    /** @brief Sets the model that this widgets displays */
     void setModel(std::shared_ptr<TimelineItemModel> model);
     std::shared_ptr<TimelineItemModel> getModel() const;
     void setRoot(QQuickItem *root);
 
     Q_INVOKABLE bool isMultitrackSelected() const { return m_selection.isMultitrackSelected; }
     Q_INVOKABLE int selectedTrack() const { return m_selection.selectedTrack; }
-    /* @brief Add a clip id to current selection
+    /** @brief Remove a clip id from current selection
      */
-    Q_INVOKABLE void addSelection(int newSelection);
-    /* @brief Clear current selection and inform the view
+    Q_INVOKABLE void removeSelection(int newSelection);
+    /** @brief Add a clip id to current selection
+     */
+    Q_INVOKABLE void addSelection(int newSelection, bool clear = false);
+    /** @brief Edit an item's in/out points with a dialog
+     */
+    Q_INVOKABLE void editItemDuration(int itemId);
+    /** @brief Clear current selection and inform the view
      */
     void clearSelection();
+    /** @brief Select all timeline items
+     */
+    void selectAll();
+    /* @brief Select all items in one track
+     */
+    void selectCurrentTrack();
     /* @brief returns current timeline's zoom factor
      */
     Q_INVOKABLE double scaleFactor() const;
@@ -88,6 +102,7 @@ public:
     /* @brief Returns the project's duration (tractor)
      */
     Q_INVOKABLE int duration() const;
+    Q_INVOKABLE int fullDuration() const;
     /* @brief Returns the current cursor position (frame currently displayed by MLT)
      */
     Q_INVOKABLE int position() const { return m_position; }
@@ -120,7 +135,7 @@ public:
        @param logUndo if set to false, no undo object is stored
        @return the id of the inserted clip
      */
-    Q_INVOKABLE int insertClip(int tid, int position, const QString &xml, bool logUndo, bool refreshView);
+    Q_INVOKABLE int insertClip(int tid, int position, const QString &xml, bool logUndo, bool refreshView, bool useTargets);
     /* @brief Request inserting multiple clips into the timeline (dragged from bin or monitor)
      * @param tid is the destination track
      * @param position is the timeline position
@@ -149,6 +164,16 @@ public:
        @return the id of the inserted composition
     */
     Q_INVOKABLE int insertComposition(int tid, int position, const QString &transitionId, bool logUndo);
+    /* @brief Request inserting a new composition in timeline (dragged from compositions list)
+       this function will check if there is a clip at insert point and
+       adjust the composition length accordingly
+       @param tid is the destination track
+       @param position is the timeline position
+       @param transitionId is the data describing the dropped composition
+       @param logUndo if set to false, no undo object is stored
+       @return the id of the inserted composition
+    */
+    Q_INVOKABLE int insertNewComposition(int tid, int position, const QString &transitionId, bool logUndo);
 
     /* @brief Request deletion of the currently selected clips
      */
@@ -250,19 +275,26 @@ public:
      */
     Q_INVOKABLE void insertSpace(int trackId = -1, int frame = -1);
     Q_INVOKABLE void removeSpace(int trackId = -1, int frame = -1, bool affectAllTracks = false);
-    /* @brief Change a clip status (normal / audio only / video only)
+    /* @brief If clip is enabled, disable, otherwise enable
      */
-    Q_INVOKABLE void setClipStatus(int clipId, PlaylistState::ClipState status);
+    Q_INVOKABLE void switchEnableState(int clipId);
+    Q_INVOKABLE void addCompositionToClip(const QString &assetId, int clipId);
+    Q_INVOKABLE void addEffectToClip(const QString &assetId, int clipId);
 
     Q_INVOKABLE void requestClipCut(int clipId, int position);
 
     Q_INVOKABLE void extract(int clipId);
 
     Q_INVOKABLE void splitAudio(int clipId);
+    Q_INVOKABLE void splitVideo(int clipId);
+    Q_INVOKABLE void setAudioRef(int clipId);
+    Q_INVOKABLE void alignAudio(int clipId);
+    bool splitAV();
 
     /* @brief Seeks to selected clip start / end
      */
     Q_INVOKABLE void pasteEffects(int targetId, int sourceId);
+    Q_INVOKABLE double fps() const;
 
     void switchTrackLock(bool applyToAll = false);
     void switchTargetTrack();
@@ -342,12 +374,15 @@ public:
     void switchCompositing(int mode);
 
     /** @brief Change a clip item's speed in timeline */
-    Q_INVOKABLE void changeItemSpeed(int clipId, int speed);
-    /** @brief Delete selected zone and fill gap by moving following clips*/
-    void extractZone(QPoint zone);
-    /** @brief Delete selected zone */
-    void liftZone(QPoint zone);
-    bool insertZone(const QString &binId, QPoint zone, bool overwrite);
+    Q_INVOKABLE void changeItemSpeed(int clipId, double speed);
+    /** @brief Delete selected zone and fill gap by moving following clips
+     *  @param lift if true, the zone will simply be deleted but clips won't be moved
+     */
+    void extractZone(QPoint zone, bool liftOnly = false);
+    /** @brief Insert clip monitor into timeline
+     *  @returns the zone end position or -1 on fail
+     */
+    int insertZone(const QString &binId, QPoint zone, bool overwrite);
     void updateClip(int clipId, QVector<int> roles);
     void showClipKeyframes(int clipId, bool value);
     void showCompositionKeyframes(int clipId, bool value);
@@ -359,6 +394,12 @@ public:
     void resetPreview();
     /** @brief Select the clip in active track under cursor */
     void selectCurrentItem(ObjectType type, bool select, bool addToCurrent = false);
+    /** @brief Set target tracks (video, audio) */
+    void setTargetTracks(QPair<int, int> targets);
+    /** @brief Return asset's display name from it's id (effect or composition) */
+    Q_INVOKABLE const QString getAssetName(const QString &assetId, bool isTransition);
+    /** @brief Set keyboard grabbing on current selection */
+    void grabCurrent();
 
 public slots:
     void selectMultitrack();
@@ -373,6 +414,14 @@ public slots:
     void invalidateClip(int cid);
     void invalidateZone(int in, int out);
     void checkDuration();
+
+private slots:
+    void slotUpdateSelection(int itemId);
+    void updateClipActions();
+
+public:
+    /** @brief a list of actions that have to be enabled/disabled depending on the timeline selection */
+    QList <QAction *>clipActions;
 
 private:
     QQuickItem *m_root;
@@ -390,6 +439,7 @@ private:
     int m_audioTarget;
     int m_videoTarget;
     int m_activeTrack;
+    int m_audioRef;
     QPoint m_zone;
     double m_scale;
     static int m_duration;
@@ -397,6 +447,8 @@ private:
     Selection m_savedSelection;
     PreviewManager *m_timelinePreview;
     QAction *m_disablePreview;
+    std::shared_ptr<AudioCorrelation> m_audioCorrelator;
+
     void emitSelectedFromSelection();
     int getCurrentItem();
     void initializePreview();
@@ -433,6 +485,8 @@ signals:
     void renderedChunksChanged();
     void workingPreviewChanged();
     void useRulerChanged();
+    void updateZoom(double);
+    Q_INVOKABLE void ungrabHack();
 };
 
 #endif

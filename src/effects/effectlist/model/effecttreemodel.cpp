@@ -22,6 +22,7 @@
 #include "effecttreemodel.hpp"
 #include "abstractmodel/treeitem.hpp"
 #include "effects/effectsrepository.hpp"
+#include "kdenlivesettings.h"
 #include <KLocalizedString>
 #include <QDomDocument>
 #include <QFile>
@@ -29,10 +30,13 @@
 #include <array>
 #include <vector>
 
+#include <KActionCategory>
+#include <QMenu>
 #include <QDebug>
 
 EffectTreeModel::EffectTreeModel(QObject *parent)
     : AssetTreeModel(parent)
+    , m_customCategory(nullptr)
 {
 }
 
@@ -48,6 +52,8 @@ std::shared_ptr<EffectTreeModel> EffectTreeModel::construct(const QString &categ
 
     QHash<QString, std::shared_ptr<TreeItem>> effectCategory; // category in which each effect should land.
 
+    std::shared_ptr<TreeItem> miscCategory = nullptr;
+    std::shared_ptr<TreeItem> audioCategory = nullptr;
     // We parse category file
     if (!categoryFile.isEmpty()) {
         QDomDocument doc;
@@ -58,6 +64,9 @@ std::shared_ptr<EffectTreeModel> EffectTreeModel::construct(const QString &categ
 
         for (int i = 0; i < groups.count(); i++) {
             QString groupName = i18n(groups.at(i).firstChild().firstChild().nodeValue().toUtf8().constData());
+            if (!KdenliveSettings::gpu_accel() && groupName == i18n("GPU effects")) {
+                continue;
+            }
             QStringList list = groups.at(i).toElement().attribute(QStringLiteral("list")).split(QLatin1Char(','), QString::SkipEmptyParts);
 
             auto groupItem = self->rootItem->appendChild(QList<QVariant>{groupName, QStringLiteral("root")});
@@ -65,16 +74,23 @@ std::shared_ptr<EffectTreeModel> EffectTreeModel::construct(const QString &categ
                 effectCategory[effect] = groupItem;
             }
         }
+        // We also create "Misc", "Audio" and "Custom" categories
+        miscCategory = self->rootItem->appendChild(QList<QVariant>{i18n("Misc"), QStringLiteral("root")});
+        audioCategory = self->rootItem->appendChild(QList<QVariant>{i18n("Audio"), QStringLiteral("root")});
+        self->m_customCategory = self->rootItem->appendChild(QList<QVariant>{i18n("Custom"), QStringLiteral("root")});
+    } else {
+        // Flat view
+        miscCategory = self->rootItem;
+        audioCategory = self->rootItem;
+        self->m_customCategory = self->rootItem;
     }
-
-    // We also create "Misc", "Audio" and "Custom" categories
-    auto miscCategory = self->rootItem->appendChild(QList<QVariant>{i18n("Misc"), QStringLiteral("root")});
-    auto audioCategory = self->rootItem->appendChild(QList<QVariant>{i18n("Audio"), QStringLiteral("root")});
-    auto customCategory = self->rootItem->appendChild(QList<QVariant>{i18n("Custom"), QStringLiteral("root")});
 
     // We parse effects
     auto allEffects = EffectsRepository::get()->getNames();
     for (const auto &effect : allEffects) {
+        if (!KdenliveSettings::gpu_accel() && effect.first.contains(QLatin1String("movit."))) {
+            continue;
+        }
         auto targetCategory = miscCategory;
         EffectType type = EffectsRepository::get()->getType(effect.first);
         if (effectCategory.contains(effect.first)) {
@@ -84,16 +100,47 @@ std::shared_ptr<EffectTreeModel> EffectTreeModel::construct(const QString &categ
         }
 
         if (type == EffectType::Custom) {
-            targetCategory = customCategory;
+            targetCategory = self->m_customCategory;
         }
 
         // we create the data list corresponding to this profile
         QList<QVariant> data;
-        bool isFav = EffectsRepository::get()->isFavorite(effect.first);
+        bool isFav = KdenliveSettings::favorite_effects().contains(effect.first);
         qDebug() << effect.second << effect.first << "in " << targetCategory->dataColumn(0).toString();
         data << effect.second << effect.first << QVariant::fromValue(type) << isFav;
 
         targetCategory->appendChild(data);
     }
     return self;
+}
+
+void EffectTreeModel::reloadEffect(const QString &path)
+{
+    QPair <QString, QString> asset = EffectsRepository::get()->reloadCustom(path);
+    if (asset.first.isEmpty() || m_customCategory == nullptr) {
+        return;
+    }
+    QList<QVariant> data;
+    bool isFav = KdenliveSettings::favorite_effects().contains(asset.first);
+    data << asset.second << asset.first << QVariant::fromValue(EffectType::Custom) << isFav;
+    m_customCategory->appendChild(data);
+}
+
+void EffectTreeModel::reloadAssetMenu(QMenu *effectsMenu, KActionCategory *effectActions)
+{
+    for (int i = 0; i < rowCount(); i++) {
+        std::shared_ptr<TreeItem> item = rootItem->child(i);
+        if (item->childCount() > 0) {
+            QMenu *catMenu = new QMenu(item->dataColumn(nameCol).toString(), effectsMenu);
+            effectsMenu->addMenu(catMenu);
+            for (int j = 0; j < item->childCount(); j++) {
+                std::shared_ptr<TreeItem> child = item->child(j);
+                QAction *a = new QAction(child->dataColumn(nameCol).toString(), catMenu);
+                const QString id = child->dataColumn(idCol).toString();
+                a->setData(id);
+                catMenu->addAction(a);
+                effectActions->addAction("transition_" + id, a);
+            }
+        }
+    }
 }

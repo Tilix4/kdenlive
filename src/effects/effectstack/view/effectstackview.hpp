@@ -61,6 +61,16 @@ public:
     void setModel(std::shared_ptr<EffectStackModel> model, const QSize frameSize);
     void unsetModel(bool reset = true);
     ObjectId stackOwner() const;
+    /** @brief Add an effect to the current stack
+     */
+    void addEffect(const QString &effectId);
+    /** @brief Returns true if effectstack is empty
+     */
+    bool isEmpty() const;
+    /** @brief Enables / disables the stack
+     */
+    void enableStack(bool enable);
+    bool isStackEnabled() const;
 
 protected:
     void dragEnterEvent(QDragEnterEvent *event) override;
@@ -69,14 +79,14 @@ protected:
 private:
     QMutex m_mutex;
     QVBoxLayout *m_lay;
-    //BuiltStack *m_builtStack;
+    // BuiltStack *m_builtStack;
     QTreeView *m_effectsTree;
     std::shared_ptr<EffectStackModel> m_model;
     std::vector<CollapsibleEffectView *> m_widgets;
     AssetIconProvider *m_thumbnailer;
 
     /** @brief the frame size of the original clip this effect is applied on
-    */
+     */
     QSize m_sourceFrameSize;
     const QString getStyleSheet();
     void updateTreeHeight();
@@ -88,11 +98,13 @@ private slots:
     void slotActivateEffect(std::shared_ptr<EffectItemModel> effectModel);
     void loadEffects();
 
-//    void switchBuiltStack(bool show);
+    //    void switchBuiltStack(bool show);
 
 signals:
     void doActivateEffect(QModelIndex);
     void seekToPos(int);
+    void reloadEffect(const QString &path);
+    void updateEnabledState();
 };
 
 #endif

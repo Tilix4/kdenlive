@@ -81,18 +81,22 @@ public:
      */
     operator Mlt::Producer &() { return *m_track.get(); }
 
-    /* Returns true if track is in locked state
+    /* @brief Returns true if track is in locked state
      */
     bool isLocked() const;
-    /* Returns true if track is an audio track
+    /* @brief Returns true if track is an audio track
      */
     bool isAudioTrack() const;
+    /* @brief Returns true if track is disabled
+     */
+    bool isHidden() const;
+    /* @brief Returns true if track is disabled
+     */
+    bool isMute() const;
 
     // TODO make protected
     QVariant getProperty(const QString &name) const;
     void setProperty(const QString &name, const QString &value);
-    std::unordered_set<int> getClipsAfterPosition(int position, int end = -1);
-    std::unordered_set<int> getCompositionsAfterPosition(int position, int end);
 
 protected:
     /* @brief Returns a lambda that performs a resize of the given clip.
@@ -159,6 +163,9 @@ protected:
     int getBlankStart(int position);
     int getBlankSizeAtPos(int frame);
 
+    /*@brief Returns the best composition duration depending on clips on the track */
+    int suggestCompositionLength(int position);
+
     /*@brief Returns the (unique) construction id of the track*/
     int getId() const;
 
@@ -207,11 +214,28 @@ protected:
     /* @brief Add a track effect */
     bool addEffect(const QString &effectId);
 
+    /* @brief Returns a comma separated list of effect names */
+    const QString effectNames() const;
+
+    /* @brief Returns true if effect stack is enabled */
+    bool stackEnabled() const;
+
+    /* @brief Enable / disable the track's effect stack */
+    void setEffectStackEnabled(bool enable);
+
     /* @brief This function removes the clip from the mlt object, and then insert it back in the same spot again.
      * This is used when some properties of the clip have changed, and we need this to refresh it */
     void replugClip(int clipId);
 
     int trackDuration();
+
+    /* @brief Returns the list of the ids of the clips that intersect the given range */
+    std::unordered_set<int> getClipsInRange(int position, int end = -1);
+    /* @brief Returns the list of the ids of the compositions that intersect the given range */
+    std::unordered_set<int> getCompositionsInRange(int position, int end);
+
+    /* @brief Import effects from a service that contains some (another track) */
+    bool importEffects(std::weak_ptr<Mlt::Service> service);
 
 public slots:
     /*Delete the current track and all its associated clips */

@@ -52,13 +52,13 @@ public:
     AssetType getType(const QString &assetId) const;
 
     /* @brief Return name of asset */
-    QString getName(const QString &assetId) const;
+    Q_INVOKABLE QString getName(const QString &assetId) const;
 
     /* @brief Return description of asset */
     QString getDescription(const QString &assetId) const;
 
-    /* @brief Check whether a given asset is favorite */
-    bool isFavorite(const QString &assetId) const;
+    /* @brief Set an asset as favorite (or not)*/
+    virtual void setFavorite(const QString & assetId, bool favorite) = 0;
 
     /* @brief Returns a DomElement representing the asset's properties */
     QDomElement getXml(const QString &assetId) const;
@@ -79,6 +79,7 @@ protected:
 
     void init();
     virtual Mlt::Properties *retrieveListFromMlt() = 0;
+    virtual void parseFavorites() = 0;
 
     /* @brief Parse some info from a mlt structure
        @param res Datastructure to fill
@@ -112,6 +113,7 @@ protected:
     std::unordered_map<QString, Info> m_assets;
 
     QSet<QString> m_blacklist;
+    QSet<QString> m_favorites;
 };
 
 #include "abstractassetsrepository.ipp"

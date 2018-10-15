@@ -31,7 +31,7 @@
 
 TimelineTabs::TimelineTabs(QWidget *parent)
     : QTabWidget(parent)
-    , m_mainTimeline(new TimelineWidget(pCore->window()->actionCollection(), this))
+    , m_mainTimeline(new TimelineWidget(this))
 {
     setTabBarAutoHide(true);
     setTabsClosable(true);
@@ -72,6 +72,9 @@ void TimelineTabs::connectTimeline(TimelineWidget *timeline)
     connect(this, &TimelineTabs::showAudioThumbnailsChanged, timeline->controller(), &TimelineController::showAudioThumbnailsChanged);
     connect(this, &TimelineTabs::changeZoom, timeline, &TimelineWidget::slotChangeZoom);
     connect(timeline->controller(), &TimelineController::showTransitionModel, this, &TimelineTabs::showTransitionModel);
+    connect(timeline->controller(), &TimelineController::updateZoom, [&](double value) {
+        emit updateZoom(getCurrentTimeline()->zoomForScale(value));
+    });
     connect(timeline->controller(), &TimelineController::showItemEffectStack, this, &TimelineTabs::showItemEffectStack);
 }
 

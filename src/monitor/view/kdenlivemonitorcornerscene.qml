@@ -1,8 +1,9 @@
-import QtQuick 2.0
+import QtQuick 2.4
 
 Item {
     id: root
     objectName: "rootcornerscene"
+    SystemPalette { id: activePalette }
 
     // default size, but scalable by user
     height: 300; width: 400
@@ -11,7 +12,6 @@ Item {
     property rect framesize
     property point profile
     property point center
-    property double zoom
     property double scalex
     property double scaley
     property double stretch : 1
@@ -25,26 +25,30 @@ Item {
     onSourcedarChanged: refreshdar()
     property bool iskeyframe
     property int requestedKeyFrame
+    property real baseUnit: fontMetrics.font.pointSize
+    property int duration: 300
+    property int mouseRulerPos: 0
+    property double frameSize: 10
+    property double timeScale: 1
     property var centerPoints: []
-    property bool showToolbar: false
     onCenterPointsChanged: canvas.requestPaint()
     signal effectPolygonChanged()
-    signal addKeyframe()
-    signal seekToKeyframe()
-    signal toolBarChanged(bool doAccept)
-    onZoomChanged: {
-        effectToolBar.setZoom(root.zoom)
-    }
 
     function refreshdar() {
         canvas.darOffset = root.sourcedar < root.profile.x * root.stretch / root.profile.y ? (root.profile.x * root.stretch - root.profile.y * root.sourcedar) / (2 * root.profile.x * root.stretch) :(root.profile.y - root.profile.x * root.stretch / root.sourcedar) / (2 * root.profile.y);
         canvas.requestPaint()
     }
 
-    Text {
-        id: fontReference
-        property int fontSize
-        fontSize: font.pointSize
+    onDurationChanged: {
+        clipMonitorRuler.updateRuler()
+    }
+    onWidthChanged: {
+        clipMonitorRuler.updateRuler()
+    }
+
+    FontMetrics {
+        id: fontMetrics
+        font.family: "Arial"
     }
 
     Canvas {
@@ -55,7 +59,7 @@ Item {
       height: root.height
       anchors.centerIn: root
       contextType: "2d";
-      handleSize: fontReference.fontSize / 2
+      handleSize: root.baseUnit / 2
       renderTarget: Canvas.FramebufferObject
       renderStrategy: Canvas.Cooperative
       onPaint:
@@ -130,6 +134,8 @@ Item {
 
     function convertPoint(p)
     {
+        console.log('FRAME: ', frame.x)
+        console.log('P: ', p.x)
         var x = frame.x + p.x * root.scalex
         var y = frame.y + p.y * root.scaley
         return Qt.point(x,y);
@@ -156,7 +162,7 @@ Item {
         cursorShape: containsMouse ? Qt.PointingHandCursor : Qt.ArrowCursor
 
         onDoubleClicked: {
-            root.addKeyframe()
+            controller.addRemoveKeyframe()
         }
 
         onPositionChanged: {
@@ -193,11 +199,20 @@ Item {
     EffectToolBar {
         id: effectToolBar
         anchors {
-            left: parent.left
+            right: parent.right
             top: parent.top
-            topMargin: 10
-            leftMargin: 10
+            topMargin: 4
+            rightMargin: 4
         }
-        visible: root.showToolbar
+        visible: global.mouseX >= x - 10
+    }
+    MonitorRuler {
+        id: clipMonitorRuler
+        anchors {
+            left: root.left
+            right: root.right
+            bottom: root.bottom
+        }
+        height: controller.rulerHeight
     }
 }

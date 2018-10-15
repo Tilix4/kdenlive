@@ -21,7 +21,9 @@
 
 #include "transitionstackview.hpp"
 #include "assets/model/assetparametermodel.hpp"
+#include "assets/keyframes/model/keyframemodellist.hpp"
 #include "core.h"
+#include "monitor/monitor.h"
 
 #include <QComboBox>
 #include <QDebug>
@@ -44,7 +46,7 @@ void TransitionStackView::setModel(const std::shared_ptr<AssetParameterModel> &m
     m_trackBox->addItem(i18n("Automatic"), -1);
     while (i.hasNext()) {
         i.next();
-        if (i.key() != aTrack.second) {
+        if (i.key() < aTrack.second) {
             m_trackBox->addItem(i.value(), i.key());
         }
     }
@@ -57,6 +59,10 @@ void TransitionStackView::setModel(const std::shared_ptr<AssetParameterModel> &m
     lay->addWidget(title);
     lay->addWidget(m_trackBox);
     m_lay->insertLayout(0, lay);
+    auto kfr = model->getKeyframeModel();
+    if (kfr) {
+        connect(kfr.get(), &KeyframeModelList::modelChanged, this, &AssetParameterView::slotRefresh);
+    }
     connect(model.get(), &AssetParameterModel::compositionTrackChanged, this, &TransitionStackView::checkCompoTrack);
     connect(m_trackBox, SIGNAL(currentIndexChanged(int)), this, SLOT(updateTrack(int)));
     connect(this, &AssetParameterView::seekToPos, [this](int pos) {
@@ -64,6 +70,16 @@ void TransitionStackView::setModel(const std::shared_ptr<AssetParameterModel> &m
         int clipIn = pCore->getItemPosition(m_model->getOwnerId());
         emit seekToTransPos(pos + clipIn);
     });
+    initKeyframeView(true);
+    pCore->getMonitor(m_model->monitorId)->slotShowEffectScene(needsMonitorEffectScene());
+}
+
+void TransitionStackView::unsetModel()
+{
+    if (m_model) {
+        pCore->getMonitor(m_model->monitorId)->slotShowEffectScene(MonitorSceneDefault);
+    }
+    AssetParameterView::unsetModel();
 }
 
 void TransitionStackView::updateTrack(int newTrack)

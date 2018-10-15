@@ -240,7 +240,8 @@ qt5_add_dbus_adaptor(kdenlive_SRCS
     MainWindow
     )
 qt5_add_resources(kdenlive_extra_SRCS icons.qrc ui/resources.qrc uiresources.qrc)
-add_library(kdenliveLib STATIC ${kdenlive_SRCS} ${kdenlive_UIS})
+qt5_wrap_cpp(kdenlive_MOC definitions.h)
+add_library(kdenliveLib STATIC ${kdenlive_SRCS} ${kdenlive_UIS} ${kdenlive_MOC})
 add_executable(kdenlive
   main.cpp
   ${kdenlive_extra_SRCS}
@@ -285,7 +286,6 @@ target_link_libraries(kdenliveLib
     KF5::TextWidgets
     KF5::Declarative
     KF5::IconThemes
-    KF5::Crash
     KF5::Solid
     Qt5::Svg
     Qt5::Quick
@@ -305,6 +305,24 @@ message(STATUS "Found MLT++: ${MLTPP_LIBRARIES}")
 if (KF5_FILEMETADATA)
     add_definitions(-DKF5_USE_FILEMETADATA)
     target_link_libraries(kdenliveLib KF5::FileMetaData)
+endif()
+
+if (DRMINGW_FOUND)
+    add_definitions(-DUSE_DRMINGW)
+    target_link_libraries(kdenlive ${DRMINGW_LIBRARY})
+elseif (KF5Crash_FOUND)
+    add_definitions(-DKF5_USE_CRASH)
+    target_link_libraries(kdenlive KF5::Crash)
+endif()
+
+if (KF5_PURPOSE)
+    add_definitions(-DKF5_USE_PURPOSE)
+    target_link_libraries(kdenliveLib KF5::Purpose KF5::PurposeWidgets)
+endif()
+
+if (KF5_PURPOSE)
+    add_definitions(-DKF5_USE_PURPOSE)
+    target_link_libraries(kdenlive KF5::Purpose KF5::PurposeWidgets)
 endif()
 
 if (Qt5WebKitWidgets_FOUND)
@@ -340,6 +358,7 @@ if(BUILD_JogShuttle)
         )
 endif()
 
+set_property(SOURCE definitions.h PROPERTY SKIP_AUTOMOC ON)
 install(TARGETS kdenlive DESTINATION ${BIN_INSTALL_DIR})
 install(FILES kdenliveui.rc DESTINATION ${KXMLGUI_INSTALL_DIR}/kdenlive)
 

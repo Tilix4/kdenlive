@@ -37,6 +37,7 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QMimeData>
+#include <QAction>
 #include <QStandardPaths>
 #include <QTreeWidgetItem>
 #include <unistd.h>
@@ -118,7 +119,7 @@ DvdWizardVob::DvdWizardVob(QWidget *parent)
 
     m_view.dvd_profile->addItems(QStringList() << i18n("PAL 4:3") << i18n("PAL 16:9") << i18n("NTSC 4:3") << i18n("NTSC 16:9"));
 
-    connect(m_view.dvd_profile, SIGNAL(activated(int)), this, SLOT(slotCheckProfiles()));
+    connect(m_view.dvd_profile, static_cast<void (KComboBox::*)(int)>(&KComboBox::activated), this, &DvdWizardVob::slotCheckProfiles);
     m_vobList->header()->setStretchLastSection(false);
     m_vobList->header()->setSectionResizeMode(0, QHeaderView::Stretch);
     m_vobList->header()->setSectionResizeMode(1, QHeaderView::Custom);
@@ -304,7 +305,7 @@ void DvdWizardVob::slotAddVobFile(const QUrl &url, const QString &chapters, bool
         double fps = profile.fps();
         profile.from_producer(*producer);
         profile.set_explicit(1);
-        if (!qFuzzyCompare(profile.fps(),fps)) {
+        if (!qFuzzyCompare(profile.fps(), fps)) {
             // fps changed, rebuild producer
             delete producer;
             producer = new Mlt::Producer(profile, resource.toUtf8().data());
@@ -793,7 +794,7 @@ void DvdWizardVob::slotTranscodedClip(const QString &src, const QString &transco
                 double fps = profile.fps();
                 profile.from_producer(*producer);
                 profile.set_explicit(1);
-                if (!qFuzzyCompare(profile.fps(),fps)) {
+                if (!qFuzzyCompare(profile.fps(), fps)) {
                     // fps changed, rebuild producer
                     delete producer;
                     producer = new Mlt::Producer(profile, resource.toUtf8().data());

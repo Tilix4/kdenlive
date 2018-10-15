@@ -6,7 +6,15 @@ bool test_model_equality(std::shared_ptr<KeyframeModel> m1, std::shared_ptr<Keyf
 {
     // we cheat a bit by simply comparing the underlying map
     qDebug() << "Equality test" << m1->m_keyframeList.size() << m2->m_keyframeList.size();
-    return m1->m_keyframeList == m2->m_keyframeList;
+    QList <QVariant> model1;
+    QList <QVariant> model2;
+    for (const auto &m : m1->m_keyframeList) {
+        model1 << m.first.frames(25)<<(int)m.second.first<<m.second.second;
+    }
+    for (const auto &m : m2->m_keyframeList) {
+        model2 << m.first.frames(25)<<(int)m.second.first<<m.second.second;
+    }
+    return model1 == model2;
 }
 
 bool check_anim_identity(std::shared_ptr<KeyframeModel> m)
@@ -65,16 +73,16 @@ TEST_CASE("Keyframe model", "[KeyframeModel]")
             REQUIRE(ok);
             auto k1 = model->getClosestKeyframe(GenTime(0.655555), &ok);
             REQUIRE(ok);
-            REQUIRE(k == k1);
+            REQUIRE(k1 == k);
             auto k2 = model->getNextKeyframe(GenTime(0.5), &ok);
             REQUIRE(ok);
-            REQUIRE(k == k2);
+            REQUIRE(k2 == k);
             auto k3 = model->getPrevKeyframe(GenTime(0.5), &ok);
             REQUIRE(ok);
             REQUIRE(k3 == k0);
             auto k4 = model->getPrevKeyframe(GenTime(10), &ok);
             REQUIRE(ok);
-            REQUIRE(k == k4);
+            REQUIRE(k4 == k);
             model->getNextKeyframe(GenTime(10), &ok);
             REQUIRE_FALSE(ok);
         };
@@ -100,16 +108,16 @@ TEST_CASE("Keyframe model", "[KeyframeModel]")
             REQUIRE(ok);
             auto k1 = model->getClosestKeyframe(GenTime(0.655555), &ok);
             REQUIRE(ok);
-            REQUIRE(k == k1);
+            REQUIRE(k1 == k);
             auto k2 = model->getNextKeyframe(GenTime(0.5), &ok);
             REQUIRE(ok);
-            REQUIRE(k == k2);
+            REQUIRE(k2 == k);
             auto k3 = model->getPrevKeyframe(GenTime(0.5), &ok);
             REQUIRE(ok);
             REQUIRE(k3 == k0);
             auto k4 = model->getPrevKeyframe(GenTime(10), &ok);
             REQUIRE(ok);
-            REQUIRE(k == k4);
+            REQUIRE(k4 == k);
             auto k5 = model->getNextKeyframe(GenTime(10), &ok);
             REQUIRE(ok);
             REQUIRE(k5 == kk);
@@ -131,7 +139,7 @@ TEST_CASE("Keyframe model", "[KeyframeModel]")
             REQUIRE(check_anim_identity(model));
             REQUIRE(model->hasKeyframe(GenTime(12.6)));
             bool ok;
-            auto k = model->getKeyframe(GenTime(1.1), &ok);
+            model->getKeyframe(GenTime(1.1), &ok);
             REQUIRE_FALSE(ok);
             auto k0 = model->getKeyframe(GenTime(0), &ok);
             REQUIRE(ok);
@@ -139,16 +147,16 @@ TEST_CASE("Keyframe model", "[KeyframeModel]")
             REQUIRE(ok);
             auto k1 = model->getClosestKeyframe(GenTime(0.655555), &ok);
             REQUIRE(ok);
-            REQUIRE(k == k0);
+            REQUIRE(k1 == k0);
             auto k2 = model->getNextKeyframe(GenTime(0.5), &ok);
             REQUIRE(ok);
-            REQUIRE(kk == k2);
+            REQUIRE(k2 == kk);
             auto k3 = model->getPrevKeyframe(GenTime(0.5), &ok);
             REQUIRE(ok);
             REQUIRE(k3 == k0);
             auto k4 = model->getPrevKeyframe(GenTime(10), &ok);
             REQUIRE(ok);
-            REQUIRE(k0 == k4);
+            REQUIRE(k4 == k0);
             auto k5 = model->getNextKeyframe(GenTime(10), &ok);
             REQUIRE(ok);
             REQUIRE(k5 == kk);
@@ -196,16 +204,16 @@ TEST_CASE("Keyframe model", "[KeyframeModel]")
             REQUIRE(ok);
             auto k1 = model->getClosestKeyframe(GenTime(pos + 10), &ok);
             REQUIRE(ok);
-            REQUIRE(k == k1);
+            REQUIRE(k1 == k);
             auto k2 = model->getNextKeyframe(GenTime(pos - 0.3), &ok);
             REQUIRE(ok);
-            REQUIRE(k == k2);
+            REQUIRE(k2 == k);
             auto k3 = model->getPrevKeyframe(GenTime(pos - 0.3), &ok);
             REQUIRE(ok);
             REQUIRE(k3 == k0);
             auto k4 = model->getPrevKeyframe(GenTime(pos + 0.3), &ok);
             REQUIRE(ok);
-            REQUIRE(k == k4);
+            REQUIRE(k4 == k);
             model->getNextKeyframe(GenTime(pos + 0.3), &ok);
             REQUIRE_FALSE(ok);
         };
@@ -232,8 +240,9 @@ TEST_CASE("Keyframe model", "[KeyframeModel]")
         state1(6.1);
 
         REQUIRE(model->addKeyframe(GenTime(12.6), KeyframeType::Discrete, 33));
-        REQUIRE_FALSE(model->moveKeyframe(GenTime(6.1), GenTime(12.6),  -1, true));
+        REQUIRE_FALSE(model->moveKeyframe(GenTime(6.1), GenTime(12.6), -1, true));
         undoStack->undo();
         state1(6.1);
     }
+    pCore->m_projectManager = nullptr;
 }

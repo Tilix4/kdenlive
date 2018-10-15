@@ -35,6 +35,7 @@
 #include "xml/xml.hpp"
 #include <QMimeDatabase>
 #include <QWidget>
+#include <KMessageWidget>
 #include <mlt++/MltProducer.h>
 #include <mlt++/MltProfile.h>
 
@@ -50,7 +51,7 @@ const QString LoadJob::getDescription() const
 }
 
 namespace {
-ClipType getTypeForService(const QString &id, const QString &path)
+ClipType::ProducerType getTypeForService(const QString &id, const QString &path)
 {
     if (id.isEmpty()) {
         QString ext = path.section(QLatin1Char('.'), -1);
@@ -124,7 +125,7 @@ std::shared_ptr<Mlt::Producer> LoadJob::loadPlaylist(QString &resource)
     xmlProfile->set_explicit(0);
     std::unique_ptr<Mlt::Producer> producer(new Mlt::Producer(*xmlProfile, "xml", resource.toUtf8().constData()));
     if (!producer->is_valid()) {
-        qDebug()<<"////// ERROR, CANNOT LOAD SELECTED PLAYLIST: "<<resource;
+        qDebug() << "////// ERROR, CANNOT LOAD SELECTED PLAYLIST: " << resource;
         return nullptr;
     }
     if (pCore->getCurrentProfile()->isCompatible(xmlProfile.get())) {
@@ -133,7 +134,7 @@ std::shared_ptr<Mlt::Producer> LoadJob::loadPlaylist(QString &resource)
         resource.prepend(QStringLiteral("xml:"));
     } else {
         // This is currently crashing so I guess we'd better reject it for now
-        qDebug()<<"////// ERROR, INCOMPATIBLE PROFILE: "<<resource;
+        qDebug() << "////// ERROR, INCOMPATIBLE PROFILE: " << resource;
         return nullptr;
         // path.prepend(QStringLiteral("consumer:"));
     }
@@ -170,12 +171,14 @@ void LoadJob::checkProfile()
         std::unique_ptr<ProfileParam> clipProfile(new ProfileParam(blankProfile.get()));
         std::unique_ptr<ProfileParam> projectProfile(new ProfileParam(pCore->getCurrentProfile().get()));
         clipProfile->adjustWidth();
-        if (clipProfile != projectProfile) {
+        if (*clipProfile.get() == *projectProfile.get()) {
+            if (KdenliveSettings::default_profile().isEmpty()) {
+                // Confirm default project format
+                KdenliveSettings::setDefault_profile(pCore->getCurrentProfile()->path());
+            }
+        } else {
             // Profiles do not match, propose profile adjustment
-            pCore->currentDoc()->switchProfile(projectProfile, m_clipId, m_xml);
-        } else if (KdenliveSettings::default_profile().isEmpty()) {
-            // Confirm default project format
-            KdenliveSettings::setDefault_profile(pCore->getCurrentProfile()->path());
+            pCore->currentDoc()->switchProfile(clipProfile, m_clipId, m_xml);
         }
     }
 }
@@ -242,7 +245,7 @@ bool LoadJob::startJob()
         return true;
     }
     m_resource = Xml::getXmlProperty(m_xml, QStringLiteral("resource"));
-    ClipType type = static_cast<ClipType>(m_xml.attribute(QStringLiteral("type")).toInt());
+    ClipType::ProducerType type = static_cast<ClipType::ProducerType>(m_xml.attribute(QStringLiteral("type")).toInt());
     if (type == ClipType::Unknown) {
         type = getTypeForService(Xml::getXmlProperty(m_xml, QStringLiteral("mlt_service")), m_resource);
     }
@@ -269,6 +272,10 @@ bool LoadJob::startJob()
         qCDebug(KDENLIVE_LOG) << " / / / / / / / / ERROR / / / / // CANNOT LOAD PRODUCER: " << m_resource;
         m_done = true;
         m_successful = false;
+        if (m_producer) {
+            m_producer.reset();
+        }
+        QMetaObject::invokeMethod(pCore.get(), "displayBinMessage", Qt::QueuedConnection, Q_ARG(const QString &, i18n("Cannot open file %1", m_resource)), Q_ARG(int, (int)KMessageWidget::Warning));
         m_errorMessage.append(i18n("ERROR: Could not load clip %1: producer is invalid", m_resource));
         return false;
     }
@@ -510,10 +517,11 @@ bool LoadJob::commitResult(Fun &undo, Fun &redo)
     m_resultConsumed = true;
     auto m_binClip = pCore->projectItemModel()->getClipByBinID(m_clipId);
     if (!m_successful) {
+        // TODO: Deleting cannot happen at this stage or we endup in a mutex lock
         pCore->projectItemModel()->requestBinClipDeletion(m_binClip, undo, redo);
         return false;
     }
-    if (m_xml.hasAttribute(QStringLiteral("checkProfile")) && m_producer->get_int("video_index") > -1) {
+    if (m_xml.hasAttribute(QStringLiteral("_checkProfile")) && m_producer->get_int("video_index") > -1) {
         checkProfile();
     }
     if (m_video_list.size() > 1) {
@@ -526,8 +534,7 @@ bool LoadJob::commitResult(Fun &undo, Fun &redo)
         clip->setProducer(prod, true);
         return true;
     };
-    auto reverse = []()
-    {
+    auto reverse = []() {
         // This is probably not invertible, leave as is.
         return true;
     };

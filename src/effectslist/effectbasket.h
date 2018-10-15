@@ -20,10 +20,7 @@
 #ifndef EFFECTBASKET_H
 #define EFFECTBASKET_H
 
-#include <QDomElement>
 #include <QListWidget>
-
-class EffectsListView;
 
 /**
  * @class EffectBasket
@@ -36,21 +33,20 @@ class EffectBasket : public QListWidget
     Q_OBJECT
 
 public:
-    explicit EffectBasket(EffectsListView *effectList);
+    explicit EffectBasket(QWidget *parent);
 
 protected:
     QMimeData *mimeData(const QList<QListWidgetItem *> list) const override;
     void showEvent(QShowEvent *event) override;
 
-private:
-    EffectsListView *m_effectList;
+public slots:
+    void slotReloadBasket();
 
 private slots:
-    void slotReloadBasket();
     void slotAddEffect(QListWidgetItem *item);
 
 signals:
-    void addEffect(const QDomElement &);
+    void activateAsset(const QVariantMap &);
 };
 
 #endif

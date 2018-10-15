@@ -62,9 +62,13 @@ Core::~Core()
     if (m_monitorManager) {
         delete m_monitorManager;
     }
-    m_binController->destroyBin();
+    if (m_binController) {
+        m_binController->destroyBin();
+    }
     // delete m_binWidget;
-    delete m_projectManager;
+    if (m_projectManager) {
+        delete m_projectManager;
+    }
 }
 
 void Core::build(const QString &MltPath)
@@ -163,8 +167,7 @@ void Core::initGUI(const QUrl &Url)
     m_library = new LibraryWidget(m_projectManager);
     connect(m_library, SIGNAL(addProjectClips(QList<QUrl>)), m_binWidget, SLOT(droppedUrls(QList<QUrl>)));
     connect(this, &Core::updateLibraryPath, m_library, &LibraryWidget::slotUpdateLibraryPath);
-    connect(m_binWidget, &Bin::storeFolder, m_binController.get(),
-            &BinController::slotStoreFolder);
+    connect(m_binWidget, &Bin::storeFolder, m_binController.get(), &BinController::slotStoreFolder);
     // connect(m_binController.get(), &BinController::slotProducerReady, m_binWidget, &Bin::slotProducerReady, Qt::DirectConnection);
     // connect(m_binController.get(), &BinController::prepareTimelineReplacement, m_binWidget, &Bin::prepareTimelineReplacement, Qt::DirectConnection);
 
@@ -177,6 +180,8 @@ void Core::initGUI(const QUrl &Url)
     m_producerQueue = new ProducerQueue(m_binController);
     connect(m_producerQueue, &ProducerQueue::gotFileProperties, m_binWidget, &Bin::slotProducerReady);
     connect(m_producerQueue, &ProducerQueue::replyGetImage, m_binWidget, &Bin::slotThumbnailReady);
+    connect(m_producerQueue, &ProducerQueue::requestProxy,
+            [this](const QString &id){ m_binWidget->startJob(id, AbstractClipJob::PROXYJOB);});
     connect(m_producerQueue, &ProducerQueue::removeInvalidClip, m_binWidget, &Bin::slotRemoveInvalidClip, Qt::DirectConnection);
     connect(m_producerQueue, SIGNAL(addClip(QString, QMap<QString, QString>)), m_binWidget, SLOT(slotAddUrl(QString, QMap<QString, QString>)));
     connect(m_binController.get(), SIGNAL(createThumb(QDomElement, QString, int)), m_producerQueue, SLOT(getFileProperties(QDomElement, QString, int)));
@@ -306,6 +311,9 @@ bool Core::setCurrentProfile(const QString &profilePath)
         m_thumbProfile.reset();
         // inform render widget
         m_mainWindow->updateRenderWidgetProfile();
+        if (m_guiConstructed) {
+            m_mainWindow->getCurrentTimeline()->controller()->getModel()->updateProfile(&getCurrentProfile()->profile());
+        }
         return true;
     }
     return false;
@@ -461,6 +469,14 @@ KdenliveDoc *Core::currentDoc()
     return m_projectManager->current();
 }
 
+int Core::projectDuration() const
+{
+    if (!m_guiConstructed) {
+        return 0;
+    }
+    return m_mainWindow->getCurrentTimeline()->controller()->duration();
+}
+
 void Core::profileChanged()
 {
     GenTime::setFps(getCurrentFps());
@@ -478,13 +494,21 @@ void Core::pushUndo(QUndoCommand *command)
 
 void Core::displayMessage(const QString &message, MessageType type, int timeout)
 {
-    m_mainWindow->displayMessage(message, type, timeout);
+    if (m_mainWindow) {
+        m_mainWindow->displayMessage(message, type, timeout);
+    } else {
+        qDebug() << message;
+    }
+}
+
+void Core::displayBinMessage(const QString &text, int type, const QList<QAction *> &actions)
+{
+    m_binWidget->doDisplayMessage(text, (KMessageWidget::MessageType)type, actions);
 }
 
 void Core::clearAssetPanel(int itemId)
 {
-    if (m_guiConstructed)
-        m_mainWindow->clearAssetPanel(itemId);
+    if (m_guiConstructed) m_mainWindow->clearAssetPanel(itemId);
 }
 
 std::shared_ptr<EffectStackModel> Core::getItemEffectStack(int itemType, int itemId)
@@ -567,9 +591,9 @@ void Core::updateItemKeyframes(ObjectId id)
 
 void Core::updateItemModel(ObjectId id, const QString &service)
 {
-    if (!m_mainWindow->getCurrentTimeline()->loading && service.startsWith(QLatin1String("fade")) && id.first == ObjectType::TimelineClip) {
+    if (m_mainWindow && !m_mainWindow->getCurrentTimeline()->loading && service.startsWith(QLatin1String("fade")) && id.first == ObjectType::TimelineClip) {
         bool startFade = service == QLatin1String("fadein") || service == QLatin1String("fade_from_black");
-        m_mainWindow->getCurrentTimeline()->controller()->updateClip(id.second, {startFade ?TimelineModel::FadeInRole : TimelineModel::FadeOutRole});
+        m_mainWindow->getCurrentTimeline()->controller()->updateClip(id.second, {startFade ? TimelineModel::FadeInRole : TimelineModel::FadeOutRole});
     }
 }
 
@@ -596,5 +620,15 @@ Mlt::Profile *Core::thumbProfile()
 
 void Core::clearSelection()
 {
-    m_mainWindow->getCurrentTimeline()->controller()->clearSelection();
+    if (m_mainWindow) {
+        m_mainWindow->getCurrentTimeline()->controller()->clearSelection();
+    }
+}
+
+void Core::triggerAction(const QString &name)
+{
+    QAction *action = m_mainWindow->actionCollection()->action(name);
+    if (action) {
+        action->trigger();
+    }
 }

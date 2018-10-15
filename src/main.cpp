@@ -27,7 +27,12 @@
 
 #include <KAboutData>
 #include <KConfigGroup>
-#include <KCrash>
+#ifdef USE_DRMINGW
+#   include <exchndl.h>
+#elif defined(KF5_USE_CRASH)
+#   include <KCrash>
+#endif
+
 #include <KIconLoader>
 #include <KSharedConfig>
 
@@ -39,6 +44,7 @@
 #include <QCommandLineParser>
 #include <QDir>
 #include <QIcon>
+#include <KIconTheme>
 #include <QProcess>
 #include <QQmlEngine>
 #include <QUrl> //new
@@ -73,9 +79,17 @@ int main(int argc, char *argv[])
             qCDebug(KDENLIVE_LOG) << "KDE Desktop detected, using system icons";
         } else {
             // We are not on a KDE desktop, force breeze icon theme
-            grp.writeEntry("force_breeze", true);
-            qCDebug(KDENLIVE_LOG) << "Non KDE Desktop detected, forcing Breeze icon theme";
+            // Check if breeze theme is available
+            QStringList iconThemes = KIconTheme::list();
+            if (iconThemes.contains(QStringLiteral("breeze"))) {
+                grp.writeEntry("force_breeze", true);
+                grp.writeEntry("use_dark_breeze", true);
+                qCDebug(KDENLIVE_LOG) << "Non KDE Desktop detected, forcing Breeze icon theme";
+            }
         }
+        // Set breeze dark as default on first opening
+        KConfigGroup cg(config, "UiSettings");
+        cg.writeEntry("ColorScheme", "Breeze Dark");
     }
 
     // Init DBus services
@@ -133,20 +147,36 @@ int main(int argc, char *argv[])
 
     parser.addOption(QCommandLineOption(QStringList() << QStringLiteral("config"), i18n("Set a custom config file name"), QStringLiteral("config")));
     parser.addOption(QCommandLineOption(QStringList() << QStringLiteral("mlt-path"), i18n("Set the path for MLT environment"), QStringLiteral("mlt-path")));
+    parser.addOption(QCommandLineOption(QStringList() << QStringLiteral("mlt-log"), i18n("MLT log level"), QStringLiteral("verbose/debug")));
+    parser.addOption(QCommandLineOption(QStringList() << QStringLiteral("i"), i18n("Comma separated list of clips to add"), QStringLiteral("clips")));
     parser.addPositionalArgument(QStringLiteral("file"), i18n("Document to open"));
 
     // Parse command line
     parser.process(app);
     aboutData.processCommandLine(&parser);
 
+#ifdef USE_DRMINGW
+    ExcHndlInit();
+#elif defined(KF5_USE_CRASH)
     KCrash::initialize();
+#endif
 
     qmlRegisterUncreatableMetaObject(PlaylistState::staticMetaObject, // static meta object
                                      "com.enums",                     // import statement
                                      1, 0,                            // major and minor version of the import
                                      "ClipState",                     // name in QML
                                      "Error: only enums");
+    qmlRegisterUncreatableMetaObject(ClipType::staticMetaObject, // static meta object
+                                     "com.enums",                     // import statement
+                                     1, 0,                            // major and minor version of the import
+                                     "ProducerType",                     // name in QML
+                                     "Error: only enums");
     QString mltPath = parser.value(QStringLiteral("mlt-path"));
+    if (parser.value(QStringLiteral("mlt-log")) == QStringLiteral("verbose")) {
+        mlt_log_set_level( MLT_LOG_VERBOSE );
+    } else if (parser.value(QStringLiteral("mlt-log")) == QStringLiteral("debug")) {
+        mlt_log_set_level( MLT_LOG_DEBUG );
+    }
     QUrl url;
     if (parser.positionalArguments().count() != 0) {
         url = QUrl::fromLocalFile(parser.positionalArguments().at(0));

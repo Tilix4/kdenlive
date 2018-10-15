@@ -31,13 +31,14 @@ class ThumbnailProvider;
 class KActionCollection;
 class AssetParameterModel;
 class TimelineController;
+class QSortFilterProxyModel;
 
 class TimelineWidget : public QQuickWidget
 {
     Q_OBJECT
 
 public:
-    TimelineWidget(KActionCollection *actionCollection, QWidget *parent = Q_NULLPTR);
+    TimelineWidget(QWidget *parent = Q_NULLPTR);
     ~TimelineWidget();
     /* @brief Sets the model shown by this widget */
     void setModel(std::shared_ptr<TimelineItemModel> model);
@@ -48,15 +49,23 @@ public:
     TimelineController *controller();
     void setTool(ProjectTool tool);
     QPoint getTracksCount() const;
+    /* @brief calculate zoom level for a scale */
+    int zoomForScale(double value) const;
     bool loading;
 
 protected:
     void mousePressEvent(QMouseEvent *event) override;
-    void wheelEvent(QWheelEvent *event) override;
 
 public slots:
     void slotChangeZoom(int value, bool zoomOnMouse);
     void zoneUpdated(const QPoint &zone);
+    /* @brief Favorite effects have changed, reload model for context menu */
+    void updateEffectFavorites();
+    /* @brief Favorite transitions have changed, reload model for context menu */
+    void updateTransitionFavorites();
+
+private slots:
+    void slotUngrabHack();
 
 private:
     ThumbnailProvider *m_thumbnailer;
@@ -64,6 +73,11 @@ private:
     static const int comboScale[];
     std::shared_ptr<AssetTreeModel> m_transitionModel;
     std::unique_ptr<AssetFilter> m_transitionProxyModel;
+	std::shared_ptr<AssetTreeModel> m_effectsModel;
+    std::unique_ptr<AssetFilter> m_effectsProxyModel;
+    std::unique_ptr<QSortFilterProxyModel> m_sortModel;
+    /* @brief Returns an alphabetically sorted list of favorite effects or transitions */
+    const QStringList sortedItems(const QStringList &items, bool isTransition);
 
 signals:
     void focusProjectMonitor();

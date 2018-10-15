@@ -44,7 +44,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "projectsubclip.h"
 #include "timecode.h"
 #include "timeline2/model/snapmodel.hpp"
-#include "utils/KoIconUtils.h"
+
 #include "utils/thumbnailcache.hpp"
 #include "xml/xml.hpp"
 #include <QPainter>
@@ -54,6 +54,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "kdenlive_debug.h"
 #include <KLocalizedString>
 #include <KMessageBox>
+#include <QApplication>
 #include <QCryptographicHash>
 #include <QDir>
 #include <QDomElement>
@@ -70,16 +71,13 @@ ProjectClip::ProjectClip(const QString &id, const QIcon &thumb, std::shared_ptr<
     m_clipStatus = StatusReady;
     m_name = clipName();
     m_duration = getStringDuration();
+    m_inPoint = 0;
     m_date = date;
     m_description = ClipController::description();
     if (m_clipType == ClipType::Audio) {
-        m_thumbnail = KoIconUtils::themedIcon(QStringLiteral("audio-x-generic"));
+        m_thumbnail = QIcon::fromTheme(QStringLiteral("audio-x-generic"));
     } else {
         m_thumbnail = thumb;
-    }
-    if (m_clipType == ClipType::AV || m_clipType == ClipType::Audio || m_clipType == ClipType::Image || m_clipType == ClipType::Video ||
-        m_clipType == ClipType::Playlist || m_clipType == ClipType::TextTemplate) {
-        pCore->bin()->addWatchFile(id, clipUrl());
     }
     // Make sure we have a hash for this clip
     hash();
@@ -98,6 +96,7 @@ std::shared_ptr<ProjectClip> ProjectClip::construct(const QString &id, const QIc
 {
     std::shared_ptr<ProjectClip> self(new ProjectClip(id, thumb, model, producer));
     baseFinishConstruct(self);
+    self->m_effectStack->importEffects(producer, true);
     model->loadSubClips(id, self->getPropertiesFromPrefix(QStringLiteral("kdenlive:clipzone.")));
     return self;
 }
@@ -111,9 +110,9 @@ ProjectClip::ProjectClip(const QString &id, const QDomElement &description, cons
     m_thumbnail = thumb;
     m_markerModel = std::make_shared<MarkerListModel>(m_binId, pCore->projectManager()->undoStack());
     if (description.hasAttribute(QStringLiteral("type"))) {
-        m_clipType = (ClipType)description.attribute(QStringLiteral("type")).toInt();
+        m_clipType = (ClipType::ProducerType)description.attribute(QStringLiteral("type")).toInt();
         if (m_clipType == ClipType::Audio) {
-            m_thumbnail = KoIconUtils::themedIcon(QStringLiteral("audio-x-generic"));
+            m_thumbnail = QIcon::fromTheme(QStringLiteral("audio-x-generic"));
         }
     }
     m_temporaryUrl = getXmlProperty(description, QStringLiteral("resource"));
@@ -139,10 +138,6 @@ std::shared_ptr<ProjectClip> ProjectClip::construct(const QString &id, const QDo
 ProjectClip::~ProjectClip()
 {
     // controller is deleted in bincontroller
-    if (m_clipType == ClipType::AV || m_clipType == ClipType::Audio || m_clipType == ClipType::Image || m_clipType == ClipType::Video ||
-        m_clipType == ClipType::Playlist || m_clipType == ClipType::TextTemplate) {
-        pCore->bin()->removeWatchFile(clipId(), clipUrl());
-    }
     m_thumbMutex.lock();
     m_requestedThumbs.clear();
     m_thumbMutex.unlock();
@@ -154,6 +149,12 @@ void ProjectClip::connectEffectStack()
 {
     connect(m_effectStack.get(), &EffectStackModel::modelChanged, this, &ProjectClip::updateChildProducers);
     connect(m_effectStack.get(), &EffectStackModel::dataChanged, this, &ProjectClip::updateChildProducers);
+    connect(m_effectStack.get(), &EffectStackModel::dataChanged, [&](){
+        if (auto ptr = m_model.lock()) {
+            std::static_pointer_cast<ProjectItemModel>(ptr)->onItemUpdated(std::static_pointer_cast<ProjectClip>(shared_from_this()),
+                                                                           AbstractProjectItem::IconOverlay);
+        }
+    });
     /*connect(m_effectStack.get(), &EffectStackModel::modelChanged, [&](){
         qDebug()<<"/ / / STACK CHANGED";
         updateChildProducers();
@@ -193,7 +194,7 @@ bool ProjectClip::audioThumbCreated() const
     return (m_audioThumbCreated);
 }
 
-ClipType ProjectClip::clipType() const
+ClipType::ProducerType ProjectClip::clipType() const
 {
     return m_clipType;
 }
@@ -298,7 +299,10 @@ void ProjectClip::reloadProducer(bool refreshOnly)
         pCore->jobManager()->startJob<ThumbJob>({clipId()}, loadjobId, QString(), 150, -1, true, true);
 
     } else {
-        // TODO: check if another load job is running?
+        // If another load job is running?
+        if (loadjobId > -1) {
+            pCore->jobManager()->discardJobs(clipId(), AbstractClipJob::LOADJOB);
+        }
         QDomDocument doc;
         QDomElement xml = toXml(doc);
         if (!xml.isNull()) {
@@ -364,7 +368,7 @@ bool ProjectClip::setProducer(std::shared_ptr<Mlt::Producer> producer, bool repl
     m_description = ClipController::description();
     m_temporaryUrl.clear();
     if (m_clipType == ClipType::Audio) {
-        m_thumbnail = KoIconUtils::themedIcon(QStringLiteral("audio-x-generic"));
+        m_thumbnail = QIcon::fromTheme(QStringLiteral("audio-x-generic"));
     } else if (m_clipType == ClipType::Image) {
         if (getProducerIntProperty(QStringLiteral("meta.media.width")) < 8 || getProducerIntProperty(QStringLiteral("meta.media.height")) < 8) {
             KMessageBox::information(QApplication::activeWindow(),
@@ -379,21 +383,52 @@ bool ProjectClip::setProducer(std::shared_ptr<Mlt::Producer> producer, bool repl
     if (auto ptr = m_model.lock()) {
         std::static_pointer_cast<ProjectItemModel>(ptr)->onItemUpdated(std::static_pointer_cast<ProjectClip>(shared_from_this()),
                                                                        AbstractProjectItem::DataDuration);
+        std::static_pointer_cast<ProjectItemModel>(ptr)->updateWatcher(std::static_pointer_cast<ProjectClip>(shared_from_this()));
     }
     // Make sure we have a hash for this clip
     getFileHash();
-    if (m_clipType == ClipType::AV || m_clipType == ClipType::Audio || m_clipType == ClipType::Image || m_clipType == ClipType::Video ||
-        m_clipType == ClipType::Playlist || m_clipType == ClipType::TextTemplate) {
-        pCore->bin()->addWatchFile(clipId(), clipUrl());
-    }
     // set parent again (some info need to be stored in producer)
     updateParent(parentItem().lock());
+    if (pCore->currentDoc()->getDocumentProperty(QStringLiteral("enableproxy")).toInt() == 1) {
+        QList<std::shared_ptr<ProjectClip>> clipList;
+        // automatic proxy generation enabled
+        if (m_clipType == ClipType::Image && pCore->currentDoc()->getDocumentProperty(QStringLiteral("generateimageproxy")).toInt() == 1) {
+            if (getProducerIntProperty(QStringLiteral("meta.media.width")) >= KdenliveSettings::proxyimageminsize() && getProducerProperty(QStringLiteral("kdenlive:proxy")) == QStringLiteral()) {
+                clipList << std::static_pointer_cast<ProjectClip>(shared_from_this());
+            }
+        } else if (pCore->currentDoc()->getDocumentProperty(QStringLiteral("generateproxy")).toInt() == 1 && (m_clipType == ClipType::AV || m_clipType == ClipType::Video)) {
+            if (getProducerIntProperty(QStringLiteral("meta.media.width")) >= KdenliveSettings::proxyminsize() && getProducerProperty(QStringLiteral("kdenlive:proxy")) == QStringLiteral()) {
+                clipList << std::static_pointer_cast<ProjectClip>(shared_from_this());
+            }
+        }
+        if (!clipList.isEmpty()) {
+            pCore->currentDoc()->slotProxyCurrentItem(true, clipList, false);
+        }
+    }
+    pCore->bin()->reloadMonitorIfActive(clipId());
+    if (m_videoProducer) {
+        m_videoProducer.reset(m_masterProducer->cut());
+        if (hasAudio()) {
+            // disable audio but activate video
+            m_videoProducer->set("set.test_audio", 1);
+            m_videoProducer->set("set.test_image", 0);
+        }
+    }
+    for (auto &p : m_audioProducers) {
+        m_effectStack->removeService(p.second);
+    }
+    for (auto &p : m_timewarpProducers) {
+        m_effectStack->removeService(p.second);
+    }
+    // Release audio producers
+    m_audioProducers.clear();
+    m_timewarpProducers.clear();
+    replaceInTimeline();
     return true;
 }
 
 std::shared_ptr<Mlt::Producer> ProjectClip::thumbProducer()
 {
-    QMutexLocker locker(&m_producerMutex);
     if (m_thumbsProducer) {
         return m_thumbsProducer;
     }
@@ -421,48 +456,94 @@ std::shared_ptr<Mlt::Producer> ProjectClip::thumbProducer()
 void ProjectClip::createVideoMasterProducer()
 {
     if (!m_videoProducer) {
-        m_videoProducer = cloneProducer(&pCore->getCurrentProfile()->profile());
-        // disable audio but activate video
-        m_videoProducer->set("set.test_audio", 1);
-        m_videoProducer->set("set.test_image", 0);
+        m_videoProducer = std::shared_ptr<Mlt::Producer>(m_masterProducer->cut());
+        if (hasAudio()) {
+            // disable audio but activate video
+            m_videoProducer->set("set.test_audio", 1);
+            m_videoProducer->set("set.test_image", 0);
+        }
+    }
+}
+
+void ProjectClip::createDisabledMasterProducer()
+{
+    if (!m_disabledProducer) {
+        m_disabledProducer = cloneProducer(&pCore->getCurrentProfile()->profile());
+        m_disabledProducer->set("set.test_audio", 1);
+        m_disabledProducer->set("set.test_image", 1);
+        m_effectStack->addService(m_disabledProducer);
     }
 }
 std::shared_ptr<Mlt::Producer> ProjectClip::getTimelineProducer(int clipId, PlaylistState::ClipState state, double speed)
 {
+    qDebug() << "producer request"<<clipId<<speed;
     if (qFuzzyCompare(speed, 1.0)) {
         // we are requesting a normal speed producer
         // We can first cleen the speed producers we have for the current id
-        m_timewarpProducers.erase(clipId);
+        if (m_timewarpProducers.count(clipId) > 0) {
+            m_effectStack->removeService(m_timewarpProducers[clipId]);
+            m_timewarpProducers.erase(clipId);
+        }
         if (state == PlaylistState::AudioOnly) {
             // We need to get an audio producer, if none exists
             if (m_audioProducers.count(clipId) == 0) {
                 m_audioProducers[clipId] = cloneProducer(&pCore->getCurrentProfile()->profile());
                 m_audioProducers[clipId]->set("set.test_audio", 0);
                 m_audioProducers[clipId]->set("set.test_image", 1);
+                m_effectStack->addService(m_audioProducers[clipId]);
             }
             return std::shared_ptr<Mlt::Producer>(m_audioProducers[clipId]->cut());
         }
-        // we return the video producer
-        m_audioProducers.erase(clipId);
-        createVideoMasterProducer();
-        return std::shared_ptr<Mlt::Producer>(m_videoProducer->cut());
+        if (m_audioProducers.count(clipId) > 0) {
+            m_effectStack->removeService(m_audioProducers[clipId]);
+            m_audioProducers.erase(clipId);
+        }
+        if (state == PlaylistState::VideoOnly) {
+            // we return the video producer
+            createVideoMasterProducer();
+            int duration = m_masterProducer->get_int("kdenlive:duration");
+            return std::shared_ptr<Mlt::Producer>(m_videoProducer->cut(-1, duration > 0 ? duration: -1));
+        }
+        Q_ASSERT(state == PlaylistState::Disabled);
+        createDisabledMasterProducer();
+        int duration = m_masterProducer->get_int("kdenlive:duration");
+        return std::shared_ptr<Mlt::Producer>(m_disabledProducer->cut(-1, duration > 0 ? duration: -1));
     }
 
     // in that case, we need to create a warp producer, if we don't have one
-    m_audioProducers.erase(clipId);
+    if (m_audioProducers.count(clipId) > 0) {
+        m_effectStack->removeService(m_audioProducers[clipId]);
+        m_audioProducers.erase(clipId);
+    }
 
     std::shared_ptr<Mlt::Producer> warpProducer;
     if (m_timewarpProducers.count(clipId) > 0) {
+        // remove in all cases, we add it unconditionally anyways
+        m_effectStack->removeService(m_timewarpProducers[clipId]);
         if (qFuzzyCompare(m_timewarpProducers[clipId]->get_double("warp_speed"), speed)) {
             // the producer we have is good, use it !
             warpProducer = m_timewarpProducers[clipId];
+            qDebug() << "Reusing producer!";
+        } else {
+            m_timewarpProducers.erase(clipId);
         }
     }
     if (!warpProducer) {
-        QString resource = QString("timewarp:%1:%2").arg(speed).arg(originalProducer()->get("resource"));
-        warpProducer.reset(new Mlt::Producer(*originalProducer()->profile(), resource.toUtf8().constData()));
+        QLocale locale;
+        QString resource(originalProducer()->get("resource"));
+        if (resource.isEmpty() || resource == QLatin1String("<producer>")) {
+            resource = m_service;
+        }
+        QString url = QString("timewarp:%1:%2").arg(locale.toString(speed)).arg(resource);
+        warpProducer.reset(new Mlt::Producer(*originalProducer()->profile(), url.toUtf8().constData()));
+        qDebug() << "new producer: "<<url;
+        qDebug() << "warp LENGTH before" << warpProducer->get_length();
+        int original_length = originalProducer()->get_length();
+        // this is a workaround to cope with Mlt erroneous rounding
+        warpProducer->set("length", double(original_length) / speed);
     }
 
+    qDebug() << "warp LENGTH" << warpProducer->get_length();
     warpProducer->set("set.test_audio", 1);
     warpProducer->set("set.test_image", 1);
     if (state == PlaylistState::AudioOnly) {
@@ -472,7 +553,8 @@ std::shared_ptr<Mlt::Producer> ProjectClip::getTimelineProducer(int clipId, Play
         warpProducer->set("set.test_image", 0);
     }
     m_timewarpProducers[clipId] = warpProducer;
-    return warpProducer;
+    m_effectStack->addService(m_timewarpProducers[clipId]);
+    return std::shared_ptr<Mlt::Producer>(warpProducer->cut());
 }
 
 std::pair<std::shared_ptr<Mlt::Producer>, bool> ProjectClip::giveMasterAndGetTimelineProducer(int clipId, std::shared_ptr<Mlt::Producer> master,
@@ -489,46 +571,66 @@ std::pair<std::shared_ptr<Mlt::Producer>, bool> ProjectClip::giveMasterAndGetTim
             speed = master->parent().get_double("warp_speed");
             timeWarp = true;
         }
-        if (master->parent().get_int("loaded") == 1) {
+        if (master->parent().get_int("_loaded") == 1) {
             // we already have a clip that shares the same master
 
-            if (state == PlaylistState::AudioOnly || timeWarp) {
+            if (state == PlaylistState::AudioOnly || !qFuzzyIsNull(timeWarp)) {
                 // In that case, we must create copies
-                return {getTimelineProducer(clipId, state, speed), false};
+                std::shared_ptr<Mlt::Producer> prod(getTimelineProducer(clipId, state, speed)->cut(in, out));
+                return {prod, false};
             }
             // if it's a video or disabled clip, we must make sure that its master clip matches our video master
-            if (!m_videoProducer) {
+            if (state == PlaylistState::VideoOnly && !m_videoProducer) {
                 qDebug() << "Warning: weird, we found a video clip whose master is already loaded but we don't have any yet";
                 createVideoMasterProducer();
                 return {std::shared_ptr<Mlt::Producer>(m_videoProducer->cut(in, out)), false};
             }
-            if (QString::fromUtf8(m_videoProducer->get("id")) != QString::fromUtf8(master->parent().get("id"))) {
+            if (state == PlaylistState::Disabled && !m_disabledProducer) {
+                qDebug() << "Warning: weird, we found a disabled clip whose master is already loaded but we don't have any yet";
+                createDisabledMasterProducer();
+                return {std::shared_ptr<Mlt::Producer>(m_disabledProducer->cut(in, out)), false};
+            }
+            if (state == PlaylistState::VideoOnly && QString::fromUtf8(m_videoProducer->get("id")) != QString::fromUtf8(master->parent().get("id"))) {
                 qDebug() << "Warning: weird, we found a video clip whose master is already loaded but doesn't match ours";
                 return {std::shared_ptr<Mlt::Producer>(m_videoProducer->cut(in, out)), false};
+            }
+            if (state == PlaylistState::Disabled && QString::fromUtf8(m_disabledProducer->get("id")) != QString::fromUtf8(master->parent().get("id"))) {
+                qDebug() << "Warning: weird, we found a disabled clip whose master is already loaded but doesn't match ours";
+                return {std::shared_ptr<Mlt::Producer>(m_disabledProducer->cut(in, out)), false};
             }
             // We have a good id, this clip can be used
             return {master, true};
         } else {
-            master->parent().set("loaded", 1);
+            master->parent().set("_loaded", 1);
             if (state == PlaylistState::AudioOnly) {
-                m_audioProducers[clipId] = std::shared_ptr<Mlt::Producer>(&master->parent());
+                m_audioProducers[clipId] = std::shared_ptr<Mlt::Producer>(new Mlt::Producer(&master->parent()));
+                m_effectStack->addService(m_audioProducers[clipId]);
                 return {master, true};
             }
-            if (timeWarp) {
-                m_timewarpProducers[clipId] = std::shared_ptr<Mlt::Producer>(&master->parent());
+            if (!qFuzzyIsNull(timeWarp)) {
+                m_timewarpProducers[clipId] = std::shared_ptr<Mlt::Producer>(new Mlt::Producer(&master->parent()));
+                m_effectStack->addService(m_timewarpProducers[clipId]);
                 return {master, true};
             }
-            if (!m_videoProducer) {
+            if (state == PlaylistState::VideoOnly && !m_videoProducer) {
                 // good, we found a master video producer, and we didn't have any
-                m_videoProducer.reset(&master->parent());
+                m_videoProducer.reset(master->parent().cut());
+                m_effectStack->addService(m_videoProducer);
                 return {master, true};
             }
-            qDebug() << "Warning: weird, we found a video clip whose master is not loaded but we already have a master";
+            if (state == PlaylistState::Disabled && !m_disabledProducer) {
+                // good, we found a master disabled producer, and we didn't have any
+                m_disabledProducer.reset(master->parent().cut());
+                m_effectStack->addService(m_disabledProducer);
+                return {master, true};
+            }
+            qDebug() << "Warning: weird, we found a clip whose master is not loaded but we already have a master";
             return {std::shared_ptr<Mlt::Producer>(m_videoProducer->cut(in, out)), false};
         }
     } else if (master->is_valid()) {
         // in that case, we have a master
         qDebug() << "Warning: weird, we received a master clip in lieue of a cut";
+        exit(1);
         double speed = 1.0;
         if (QString::fromUtf8(master->get("mlt_service")) == QLatin1String("timewarp")) {
             speed = master->get_double("warp_speed");
@@ -617,7 +719,7 @@ QPoint ProjectClip::zone() const
     int x = getProducerIntProperty(QStringLiteral("kdenlive:zone_in"));
     int y = getProducerIntProperty(QStringLiteral("kdenlive:zone_out"));
     if (y <= x) {
-        y = getFramePlaytime() - 1;
+        y = getFramePlaytime();
     }
     return QPoint(x, y);
 }
@@ -696,6 +798,7 @@ bool ProjectClip::hasProxy() const
 
 void ProjectClip::setProperties(const QMap<QString, QString> &properties, bool refreshPanel)
 {
+    qDebug()<<"// SETTING CLIP PROPERTIES: "<<properties;
     QMapIterator<QString, QString> i(properties);
     QMap<QString, QString> passProperties;
     bool refreshAnalysis = false;
@@ -717,6 +820,7 @@ void ProjectClip::setProperties(const QMap<QString, QString> &properties, bool r
     QStringList keys;
     keys << QStringLiteral("luma_duration") << QStringLiteral("luma_file") << QStringLiteral("fade") << QStringLiteral("ttl") << QStringLiteral("softness")
          << QStringLiteral("crop") << QStringLiteral("animation");
+    QVector<int> updateRoles;
     while (i.hasNext()) {
         i.next();
         setProducerProperty(i.key(), i.value());
@@ -736,20 +840,29 @@ void ProjectClip::setProperties(const QMap<QString, QString> &properties, bool r
         // If value is "-", that means user manually disabled proxy on this clip
         if (value.isEmpty() || value == QLatin1String("-")) {
             // reset proxy
-            pCore->jobManager()->discardJobs(clipId(), AbstractClipJob::PROXYJOB);
-            reloadProducer();
+            int id;
+            if (pCore->jobManager()->hasPendingJob(clipId(), AbstractClipJob::PROXYJOB, &id)) {
+                // The proxy clip is being created, abort
+                pCore->jobManager()->discardJobs(clipId(), AbstractClipJob::PROXYJOB);
+            } else {
+                reload = true;
+                refreshOnly = false;
+            }
         } else {
             // A proxy was requested, make sure to keep original url
             setProducerProperty(QStringLiteral("kdenlive:originalurl"), url());
             pCore->jobManager()->startJob<ProxyJob>({clipId()}, -1, QString());
         }
+        refreshPanel = true;
     } else if (properties.contains(QStringLiteral("resource")) || properties.contains(QStringLiteral("templatetext")) ||
                properties.contains(QStringLiteral("autorotate"))) {
         // Clip resource changed, update thumbnail
         if (m_clipType != ClipType::Color) {
-            reloadProducer();
+            reload = true;
+            refreshOnly = false;
         } else {
             reload = true;
+            updateRoles << TimelineModel::ResourceRole;
         }
     }
     if (properties.contains(QStringLiteral("xmldata")) || !passProperties.isEmpty()) {
@@ -783,8 +896,21 @@ void ProjectClip::setProperties(const QMap<QString, QString> &properties, bool r
     }
     if (reload) {
         // producer has changed, refresh monitor and thumbnail
-        reloadProducer(refreshOnly);
-        if (auto ptr = m_model.lock()) emit std::static_pointer_cast<ProjectItemModel>(ptr)->refreshClip(m_binId);
+        if (hasProxy()) {
+            pCore->jobManager()->discardJobs(clipId(), AbstractClipJob::PROXYJOB);
+            setProducerProperty(QStringLiteral("_overwriteproxy"), 1);
+            pCore->jobManager()->startJob<ProxyJob>({clipId()}, -1, QString());
+        } else {
+            reloadProducer(refreshOnly);
+        }
+        if (refreshOnly) {
+            if (auto ptr = m_model.lock()) {
+                emit std::static_pointer_cast<ProjectItemModel>(ptr)->refreshClip(m_binId);
+            }
+        }
+        if (!updateRoles.isEmpty()) {
+            updateTimelineClips(updateRoles);
+        }
     }
     if (!passProperties.isEmpty()) {
         if (auto ptr = m_model.lock()) emit std::static_pointer_cast<ProjectItemModel>(ptr)->updateTimelineProducers(m_binId, passProperties);
@@ -798,6 +924,25 @@ ClipPropertiesController *ProjectClip::buildProperties(QWidget *parent)
     ClipPropertiesController *panel = new ClipPropertiesController(static_cast<ClipController *>(this), parent);
     connect(this, &ProjectClip::refreshPropertiesPanel, panel, &ClipPropertiesController::slotReloadProperties);
     connect(this, &ProjectClip::refreshAnalysisPanel, panel, &ClipPropertiesController::slotFillAnalysisData);
+    connect(panel, &ClipPropertiesController::requestProxy, [this] (bool doProxy) {
+        QList<std::shared_ptr<ProjectClip>> clipList {std::static_pointer_cast<ProjectClip>(shared_from_this())};
+        pCore->currentDoc()->slotProxyCurrentItem(doProxy, clipList);
+    });
+    connect(panel, &ClipPropertiesController::deleteProxy, [this] () {
+        // Disable proxy file
+        QString proxy = getProducerProperty(QStringLiteral("kdenlive:proxy"));
+        QList<std::shared_ptr<ProjectClip>> clipList {std::static_pointer_cast<ProjectClip>(shared_from_this())};
+        pCore->currentDoc()->slotProxyCurrentItem(false, clipList);
+        // Delete it
+        bool ok;
+        QDir dir = pCore->currentDoc()->getCacheDir(CacheProxy, &ok);
+        if (ok && proxy.length() > 2) {
+            proxy = QFileInfo(proxy).fileName();
+            if (dir.exists(proxy)) {
+                dir.remove(proxy);
+            }
+        }
+    });
     return panel;
 }
 
@@ -856,17 +1001,15 @@ bool ProjectClip::rename(const QString &name, int column)
     return edited;
 }
 
-/*QVariant ProjectClip::getData(DataType type) const
+QVariant ProjectClip::getData(DataType type) const
 {
     switch (type) {
     case AbstractProjectItem::IconOverlay:
-        return hasEffects() ? QVariant("kdenlive-track_has_effect") : QVariant();
-        break;
+        return m_effectStack && m_effectStack->rowCount() > 0 ? QVariant("kdenlive-track_has_effect") : QVariant();
     default:
-        break;
+        return AbstractProjectItem::getData(type);
     }
-    return AbstractProjectItem::getData(type);
-    }*/
+}
 
 void ProjectClip::slotExtractImage(const QList<int> &frames)
 {
@@ -920,7 +1063,7 @@ void ProjectClip::doExtractImage()
         frame->set("deinterlace_method", "onefield");
         frame->set("top_field_first", -1);
         if (frame->is_valid()) {
-            img = KThumb::getFrame(frame, frameWidth, 150, prod->profile()->sar() != 1);
+            img = KThumb::getFrame(frame, frameWidth, 150, !qFuzzyCompare(prod->profile()->sar(),1));
             ThumbnailCache::get()->storeThumbnail(clipId(), pos, img, false);
             emit thumbReady(pos, img);
         }
@@ -970,14 +1113,6 @@ const QString ProjectClip::getAudioThumbPath()
     int roundedFps = (int)pCore->getCurrentFps();
     audioPath.append(QStringLiteral("_%1_audio.png").arg(roundedFps));
     return audioPath;
-}
-
-bool ProjectClip::isTransparent() const
-{
-    if (m_clipType == ClipType::Text) {
-        return true;
-    }
-    return m_clipType == ClipType::Image && getProducerIntProperty(QStringLiteral("kdenlive:transparency")) == 1;
 }
 
 QStringList ProjectClip::updatedAnalysisData(const QString &name, const QString &data, int offset)

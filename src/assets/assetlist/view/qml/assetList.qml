@@ -57,16 +57,14 @@ Rectangle {
 
     ColumnLayout {
         anchors.fill: parent
-        spacing: 2
+        spacing: 0
         RowLayout {
             Layout.fillWidth: true
             Layout.fillHeight: false
-            spacing: 6
+            spacing: 4
             ExclusiveGroup { id: filterGroup}
             ToolButton {
                 id: searchList
-                implicitWidth: 40
-                implicitHeight: 40
                 iconName: "edit-find"
                 checkable: true
                 tooltip: isEffectList ? i18n('Find effect') : i18n('Find composition')
@@ -81,8 +79,6 @@ Rectangle {
             }
             ToolButton {
                 id: showAll
-                implicitWidth: 40
-                implicitHeight: 40
                 iconName: "show-all-effects"
                 checkable:true
                 exclusiveGroup: filterGroup
@@ -94,8 +90,6 @@ Rectangle {
             ToolButton {
                 id: showVideo
                 visible: isEffectList
-                implicitWidth: 40
-                implicitHeight: 40
                 iconName: "kdenlive-show-video"
                 iconSource: 'qrc:///pics/kdenlive-show-video.svgz'
                 checkable:true
@@ -108,8 +102,6 @@ Rectangle {
             ToolButton {
                 id: showAudio
                 visible: isEffectList
-                implicitWidth: 40
-                implicitHeight: 40
                 iconName: "kdenlive-show-audio"
                 iconSource: 'qrc:///pics/kdenlive-show-audio.svgz'
                 checkable:true
@@ -122,8 +114,6 @@ Rectangle {
             ToolButton {
                 id: showCustom
                 visible: isEffectList
-                implicitWidth: 40
-                implicitHeight: 40
                 iconName: "kdenlive-custom-effect"
                 checkable:true
                 exclusiveGroup: filterGroup
@@ -132,16 +122,33 @@ Rectangle {
                     assetlist.setFilterType("custom")
                 }
             }
+            ToolButton {
+                id: showFavorites
+                iconName: "favorite"
+                checkable:true
+                exclusiveGroup: filterGroup
+                tooltip: i18n('Show favorite items')
+                onClicked: {
+                    assetlist.setFilterType("favorites")
+                }
+            }
+            ToolButton {
+                id: downloadTransitions
+                visible: !isEffectList
+                iconName: "edit-download"
+                tooltip: i18n('Download New Wipes...')
+                onClicked: {
+                    assetlist.downloadNewLumas()
+                }
+            }
             Rectangle {
                 //This is a spacer
-                Layout.fillHeight: true
+                Layout.fillHeight: false
                 Layout.fillWidth: true
                 color: "transparent"
             }
             ToolButton {
                 id: showDescription
-                implicitWidth: 40
-                implicitHeight: 40
                 iconName: "help-about"
                 checkable:true
                 tooltip: i18n('Show/hide description of the ') + assetType()
@@ -196,7 +203,9 @@ Rectangle {
                 treeView.__listView.positionViewAtIndex(rowPosition(assetListModel, sel.currentIndex), ListView.Visible)
             }
             onEditingFinished: {
-                searchList.checked = false
+                if (!assetContextMenu.isDisplayed) {
+                    searchList.checked = false
+                }
             }
             Keys.onDownPressed: {
                 sel.setCurrentIndex(assetListModel.getNextChild(sel.currentIndex), ItemSelectionModel.ClearAndSelect)
@@ -241,7 +250,7 @@ Rectangle {
                 anchors.right: parent ? parent.right : undefined
                 property bool isItem : styleData.value != "root" && styleData.value != ""
                 property string mimeType : isItem ? assetlist.getMimeType(styleData.value) : ""
-                height: text.implicitHeight + 8
+                height: assetText.implicitHeight + 8
                 color: "transparent"
 
                 Drag.active: isItem ? dragArea.drag.active : false
@@ -259,28 +268,42 @@ Rectangle {
                     anchors.bottomMargin: 2
                     spacing: 2
                     Image{
+                        id: assetThumb
                         visible: assetDelegate.isItem
+                        property bool isFavorite: model == undefined || model.favorite == undefined ? false : model.favorite
                         height: parent.height
                         width: height
                         source: 'image://asseticon/' + styleData.value
                     }
                     Label {
-                        id: text
+                        id: assetText
+                        font.bold : assetThumb.isFavorite
                         text: assetlist.getName(styleData.index)
                     }
                 }
-
                 MouseArea {
                     id: dragArea
                     anchors.fill: parent
                     hoverEnabled: true
-                    drag.target: parent
+                    acceptedButtons: Qt.LeftButton | Qt.RightButton
+                    drag.target: undefined
+                    onReleased: {
+                        drag.target = undefined
+                    }
                     onPressed: {
                         if (isItem) {
-                            parent.grabToImage(function(result) {
-                                parent.Drag.imageSource = result.url
-                            })
                             sel.setCurrentIndex(styleData.index, ItemSelectionModel.ClearAndSelect)
+                            if (mouse.button === Qt.LeftButton) {
+                                drag.target = parent
+                                parent.grabToImage(function(result) {
+                                    parent.Drag.imageSource = result.url
+                                })
+                            } else {
+                                drag.target = undefined
+                                assetContextMenu.isItemFavorite = assetThumb.isFavorite
+                                assetContextMenu.popup()
+                                mouse.accepted = false
+                            }
                             console.log(parent.Drag.keys)
                         } else {
                             if (treeView.isExpanded(styleData.index)) {
@@ -296,6 +319,25 @@ Rectangle {
                             assetlist.activate(styleData.index)
                         }
                     }
+                }
+            }
+            Menu {
+                id: assetContextMenu
+                property bool isItemFavorite
+                property bool isDisplayed: false
+                MenuItem {
+                    id: favMenu
+                    text: assetContextMenu.isItemFavorite ? "Remove from favorites" : "Add to favorites"
+                    property url thumbSource
+                    onTriggered: {
+                        assetlist.setFavorite(sel.currentIndex, !assetContextMenu.isItemFavorite)
+                    }
+                }
+                onAboutToShow: {
+                    isDisplayed = true;
+                }
+                onAboutToHide: {
+                    isDisplayed = false;
                 }
             }
 

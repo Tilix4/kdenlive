@@ -23,6 +23,7 @@
 #include "assets/assetlist/view/qmltypes/asseticonprovider.hpp"
 
 #include <KDeclarative/KDeclarative>
+#include <kdeclarative_version.h>
 #include <QQmlContext>
 #include <QQuickItem>
 #include <QStandardPaths>
@@ -33,7 +34,12 @@ AssetListWidget::AssetListWidget(QWidget *parent)
 {
     KDeclarative::KDeclarative kdeclarative;
     kdeclarative.setDeclarativeEngine(engine());
+#if KDECLARATIVE_VERSION >= QT_VERSION_CHECK(5, 45, 0)
+    kdeclarative.setupEngine(engine());
+    kdeclarative.setupContext();
+#else
     kdeclarative.setupBindings();
+#endif
 }
 
 AssetListWidget::~AssetListWidget()
@@ -50,9 +56,24 @@ void AssetListWidget::setup()
     setFocusPolicy(Qt::StrongFocus);
 }
 
+void AssetListWidget::reset()
+{
+    setSource(QUrl(QStringLiteral("qrc:/qml/assetList.qml")));
+}
+
 QString AssetListWidget::getName(const QModelIndex &index) const
 {
     return m_model->getName(m_proxyModel->mapToSource(index));
+}
+
+bool AssetListWidget::isFavorite(const QModelIndex &index) const
+{
+    return m_model->isFavorite(m_proxyModel->mapToSource(index));
+}
+
+void AssetListWidget::setFavorite(const QModelIndex &index, bool favorite)
+{
+    m_model->setFavorite(m_proxyModel->mapToSource(index), favorite);
 }
 
 QString AssetListWidget::getDescription(const QModelIndex &index) const

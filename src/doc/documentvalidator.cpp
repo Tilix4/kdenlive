@@ -24,6 +24,7 @@
 #include "effectslist/initeffects.h"
 #include "mainwindow.h"
 #include "mltcontroller/bincontroller.h"
+#include "bin/binplaylist.hpp"
 
 #include "kdenlive_debug.h"
 #include <KMessageBox>
@@ -1150,9 +1151,8 @@ bool DocumentValidator::upgrade(double version, const double currentVersion)
         for (int i = 0; i < markers.count(); ++i) {
             QDomElement marker = markers.at(i).toElement();
             QDomElement property = m_doc.createElement(QStringLiteral("property"));
-            property.setAttribute(QStringLiteral("name"),
-                                  QStringLiteral("kdenlive:marker.") + marker.attribute(QStringLiteral("id")) + QLatin1Char(':') +
-                                      marker.attribute(QStringLiteral("time")));
+            property.setAttribute(QStringLiteral("name"), QStringLiteral("kdenlive:marker.") + marker.attribute(QStringLiteral("id")) + QLatin1Char(':') +
+                                                              marker.attribute(QStringLiteral("time")));
             QDomText val_node = m_doc.createTextNode(marker.attribute(QStringLiteral("type")) + QLatin1Char(':') + marker.attribute(QStringLiteral("comment")));
             property.appendChild(val_node);
             main_playlist.appendChild(property);
@@ -1181,8 +1181,8 @@ bool DocumentValidator::upgrade(double version, const double currentVersion)
         }
 
         QDomNode mlt = m_doc.firstChildElement(QStringLiteral("mlt"));
-        main_playlist.setAttribute(QStringLiteral("id"), pCore->binController()->binPlaylistId());
-        mlt.toElement().setAttribute(QStringLiteral("producer"), pCore->binController()->binPlaylistId());
+        main_playlist.setAttribute(QStringLiteral("id"), BinPlaylist::binPlaylistId);
+        mlt.toElement().setAttribute(QStringLiteral("producer"), BinPlaylist::binPlaylistId);
         QStringList ids;
         QStringList slowmotionIds;
         QDomNode firstProd = m_doc.firstChildElement(QStringLiteral("producer"));
@@ -1501,7 +1501,7 @@ bool DocumentValidator::upgrade(double version, const double currentVersion)
         playlists = m_doc.elementsByTagName(QStringLiteral("playlist"));
         QDomElement playlist;
         for (int i = 0; i < playlists.count(); i++) {
-            if (playlists.at(i).toElement().attribute(QStringLiteral("id")) == pCore->binController()->binPlaylistId()) {
+            if (playlists.at(i).toElement().attribute(QStringLiteral("id")) == BinPlaylist::binPlaylistId) {
                 playlist = playlists.at(i).toElement();
                 break;
             }
@@ -1574,8 +1574,8 @@ bool DocumentValidator::upgrade(double version, const double currentVersion)
         // We convert by parsing the start and end tags vor values and adding all to the new animated parameter
         QMap<QString, QStringList> keyframeFilterToConvert;
         keyframeFilterToConvert.insert(QStringLiteral("volume"), QStringList() << QStringLiteral("gain") << QStringLiteral("end") << QStringLiteral("level"));
-        keyframeFilterToConvert.insert(QStringLiteral("brightness"),
-                                       QStringList() << QStringLiteral("start") << QStringLiteral("end") << QStringLiteral("level"));
+        keyframeFilterToConvert.insert(QStringLiteral("brightness"), QStringList()
+                                                                         << QStringLiteral("start") << QStringLiteral("end") << QStringLiteral("level"));
 
         QDomNodeList entries = m_doc.elementsByTagName(QStringLiteral("entry"));
         for (int i = 0; i < entries.count(); i++) {
@@ -1759,6 +1759,186 @@ bool DocumentValidator::upgrade(double version, const double currentVersion)
                 }
             }
         }
+    }
+    if (version < 0.98) {
+        // rename main bin playlist, create extra tracks for old type AV clips, port groups to JSon
+        QJsonArray newGroups;
+        QDomNodeList playlists = m_doc.elementsByTagName(QStringLiteral("playlist"));
+        QDomNodeList masterProducers = m_doc.elementsByTagName(QStringLiteral("producer"));
+        QDomElement playlist;
+        QDomNode mainplaylist;
+        QDomNode mlt = m_doc.firstChildElement(QStringLiteral("mlt"));
+        QDomNode tractor = mlt.firstChildElement(QStringLiteral("tractor"));
+        // Build start trackIndex
+        QMap <QString, QString> trackIndex;
+        QDomNodeList tracks = tractor.toElement().elementsByTagName(QStringLiteral("track"));
+        for (int i = 0; i < tracks.count(); i++) {
+            trackIndex.insert(QString::number(i), tracks.at(i).toElement().attribute(QStringLiteral("producer")));
+        }
+
+        int trackOffset = 0;
+        // AV clips are not supported anymore. Check if we have some and add extra audio tracks if necessary
+        // Update the main bin name as well to be xml compliant
+        for (int i = 0; i < playlists.count(); i++) {
+            if (playlists.at(i).toElement().attribute(QStringLiteral("id")) == QLatin1String("main bin")) {
+                playlists.at(i).toElement().setAttribute(QStringLiteral("id"), BinPlaylist::binPlaylistId);
+                mainplaylist = playlists.at(i);
+                QString oldGroups = EffectsList::property(mainplaylist.toElement(), QStringLiteral("kdenlive:clipgroups"));
+                QDomDocument groupsDoc;
+                groupsDoc.setContent(oldGroups);
+                QDomNodeList groups = groupsDoc.elementsByTagName(QStringLiteral("group"));
+                for (int g = 0; g < groups.count(); g++) {
+                    QDomNodeList elements = groups.at(g).childNodes();
+                    QJsonArray array;
+                    for (int h = 0; h < elements.count(); h++) {
+                        QJsonObject item;
+                        item.insert(QLatin1String("type"), QJsonValue(QStringLiteral("Leaf")));
+                        item.insert(QLatin1String("leaf"), QJsonValue(QLatin1String("clip")));
+                        QString pos = elements.at(h).toElement().attribute(QStringLiteral("position"));
+                        QString track = trackIndex.value(elements.at(h).toElement().attribute(QStringLiteral("track")));
+                        item.insert(QLatin1String("data"), QJsonValue(QString("%1:%2").arg(track).arg(pos)));
+                        array.push_back(item);
+                    }
+                    QJsonObject currentGroup;
+                    currentGroup.insert(QLatin1String("type"), QJsonValue(QStringLiteral("Normal")));
+                    currentGroup.insert(QLatin1String("children"), array);
+                    newGroups.push_back(currentGroup);
+                }
+            } else {
+                if (EffectsList::property(playlists.at(i).toElement(), QStringLiteral("kdenlive:audio_track")) == QLatin1String("1")) {
+                    // Audio track, no need to process
+                    continue;
+                }
+                const QString playlistName = playlists.at(i).toElement().attribute(QStringLiteral("id"));
+                QDomElement duplicate_playlist = m_doc.createElement(QStringLiteral("playlist"));
+                duplicate_playlist.setAttribute(QStringLiteral("id"), QString("%1_duplicate").arg(playlistName));
+                QDomElement pltype = m_doc.createElement(QStringLiteral("property"));
+                pltype.setAttribute(QStringLiteral("name"), QStringLiteral("kdenlive:audio_track"));
+                pltype.setNodeValue(QStringLiteral("1"));
+                QDomText value1 = m_doc.createTextNode(QStringLiteral("1"));
+                pltype.appendChild(value1);
+                duplicate_playlist.appendChild(pltype);
+                QDomElement plname = m_doc.createElement(QStringLiteral("property"));
+                plname.setAttribute(QStringLiteral("name"), QStringLiteral("kdenlive:track_name"));
+                QDomText value = m_doc.createTextNode(i18n("extra audio"));
+                plname.appendChild(value);
+                duplicate_playlist.appendChild(plname);
+                QDomNodeList producers = playlists.at(i).childNodes();
+                bool duplicationRequested = false;
+                int pos = 0;
+                for (int j = 0; j < producers.count(); j++) {
+                    if (producers.at(j).nodeName() == QLatin1String("blank")) {
+                        // blank, duplicate
+                        duplicate_playlist.appendChild(producers.at(j).cloneNode());
+                        pos += producers.at(j).toElement().attribute(QStringLiteral("length")).toInt();
+                    } else if (producers.at(j).nodeName() != QLatin1String("entry")) {
+                        // property node, pass
+                        continue;
+                    } else if (producers.at(j).toElement().attribute(QStringLiteral("producer")).endsWith(playlistName)) {
+                        // This is an AV clip
+                        // Check master properties
+                        bool hasAudio = true;
+                        bool hasVideo = true;
+                        const QString currentId = producers.at(j).toElement().attribute(QStringLiteral("producer"));
+                        int in = producers.at(j).toElement().attribute(QStringLiteral("in")).toInt();
+                        int out = producers.at(j).toElement().attribute(QStringLiteral("out")).toInt();
+                        for (int k = 0; k < masterProducers.count(); k++) {
+                            if (masterProducers.at(k).toElement().attribute(QStringLiteral("id")) == currentId) {
+                                hasVideo = EffectsList::property(masterProducers.at(k).toElement(), QStringLiteral("video_index")) != QLatin1String("-1");
+                                hasAudio = EffectsList::property(masterProducers.at(k).toElement(), QStringLiteral("audio_index")) != QLatin1String("-1");
+                                break;
+                            }
+                        }
+                        if (!hasAudio) {
+                            // no duplication needed, replace with blank
+                            QDomElement duplicate = m_doc.createElement(QStringLiteral("blank"));
+                            duplicate.setAttribute(QStringLiteral("length"), QString::number(out - in + 1));
+                            duplicate_playlist.appendChild(duplicate);
+                            pos += out - in + 1;
+                            continue;
+                        }
+                        QDomNode prod = producers.at(j).cloneNode();
+                        EffectsList::setProperty(prod.toElement(), QStringLiteral("set.test_video"), QStringLiteral("1"));
+                        duplicate_playlist.appendChild(prod);
+                        // Check if that is an audio clip on a video track
+                        if (!hasVideo) {
+                            // Audio clip on a video track, replace with blank and duplicate
+                            producers.at(j).toElement().setTagName("blank");
+                            producers.at(j).toElement().setAttribute("length", QString::number(out - in + 1));
+                        } else {
+                            // group newly created AVSplit group
+                            // We temporarily store track with their playlist name since track index will change
+                            // as we insert the duplicate tracks
+                            QJsonArray array;
+                            QJsonObject items;
+                            items.insert(QLatin1String("type"), QJsonValue(QStringLiteral("Leaf")));
+                            items.insert(QLatin1String("leaf"), QJsonValue(QLatin1String("clip")));
+                            items.insert(QLatin1String("data"), QJsonValue(QString("%1:%2").arg(playlistName).arg(pos)));
+                            array.push_back(items);
+                            QJsonObject itemb;
+                            itemb.insert(QLatin1String("type"), QJsonValue(QStringLiteral("Leaf")));
+                            itemb.insert(QLatin1String("leaf"), QJsonValue(QLatin1String("clip")));
+                            itemb.insert(QLatin1String("data"), QJsonValue(QString("%1:%2").arg(duplicate_playlist.attribute(QStringLiteral("id"))).arg(pos)));
+                            array.push_back(itemb);
+                            QJsonObject currentGroup;
+                            currentGroup.insert(QLatin1String("type"), QJsonValue(QStringLiteral("AVSplit")));
+                            currentGroup.insert(QLatin1String("children"), array);
+                            newGroups.push_back(currentGroup);
+                        }
+                        duplicationRequested = true;
+                        pos += out - in + 1;
+                    } else {
+                        // no duplication needed, replace with blank
+                        QDomElement duplicate = m_doc.createElement(QStringLiteral("blank"));
+                        int in = producers.at(j).toElement().attribute(QStringLiteral("in")).toInt();
+                        int out = producers.at(j).toElement().attribute(QStringLiteral("out")).toInt();
+                        duplicate.setAttribute(QStringLiteral("length"), QString::number(out - in + 1));
+                        duplicate_playlist.appendChild(duplicate);
+                        pos += out - in + 1;
+                    }
+                }
+                if (duplicationRequested) {
+                    // Plant the playlist at the end
+                    mlt.insertBefore(duplicate_playlist, tractor);
+                    QDomNode lastTrack = tractor.firstChildElement(QStringLiteral("track"));
+                    QDomElement duplicate = m_doc.createElement(QStringLiteral("track"));
+                    duplicate.setAttribute(QStringLiteral("producer"), QString("%1_duplicate").arg(playlistName));
+                    duplicate.setAttribute(QStringLiteral("hide"), QStringLiteral("video"));
+                    tractor.insertAfter(duplicate, lastTrack);
+                    trackOffset++;
+                }
+            }
+        }
+        if (trackOffset > 0) {
+            // Some tracks were added, adjust compositions
+            QDomNodeList transitions = m_doc.elementsByTagName(QStringLiteral("transition"));
+            int max = transitions.count();
+            for (int i = 0; i < max; ++i) {
+                QDomElement t = transitions.at(i).toElement();
+                if (EffectsList::property(t, QStringLiteral("internal_added")).toInt() > 0) {
+                    // internal transitions will be rebuilt, no need to correct
+                    continue;
+                }
+                int a_track = EffectsList::property(t, QStringLiteral("a_track")).toInt();
+                int b_track = EffectsList::property(t, QStringLiteral("b_track")).toInt();
+                if (a_track > 0) {
+                    EffectsList::setProperty(t, QStringLiteral("a_track"), QString::number(a_track + trackOffset));
+                }
+                if (b_track > 0) {
+                    EffectsList::setProperty(t, QStringLiteral("b_track"), QString::number(b_track + trackOffset));
+                }
+            }
+        }
+        // Process groups data
+        QJsonDocument json(newGroups);
+        QString groupsData = QString(json.toJson());
+        tracks = tractor.toElement().elementsByTagName(QStringLiteral("track"));
+        for (int i = 0; i < tracks.count(); i++) {
+            // Replace track names with their current index in our view
+            const QString trackId = QString("%1:").arg(tracks.at(i).toElement().attribute(QStringLiteral("producer")));
+            groupsData.replace(trackId, QString("%1:").arg(i - 1));
+        }
+        EffectsList::setProperty(mainplaylist.toElement(), QStringLiteral("kdenlive:docproperties.groups"), groupsData);
     }
 
     m_modified = true;

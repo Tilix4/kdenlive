@@ -44,6 +44,8 @@ public:
     void removeMonitor(AbstractMonitor *monitor);
     Timecode timecode() const;
     void resetProfiles(const Timecode &tc);
+    /** @brief delete and rebuild consumer, for example when external display is switched */
+    void resetConsumers(bool fullReset);
     void stopActiveMonitor();
     void pauseActiveMonitor();
     AbstractMonitor *activeMonitor();
@@ -117,6 +119,10 @@ private slots:
     void slotSetInterpolation(int ix);
     /** @brief Switch muting on/off */
     void slotMuteCurrentMonitor(bool active);
+    /** @brief Zoom in active monitor */
+    void slotZoomIn();
+    /** @brief Zoom out active monitor */
+    void slotZoomOut();
 
 private:
     /** @brief Make sure 2 monitors cannot be activated simultaneously*/

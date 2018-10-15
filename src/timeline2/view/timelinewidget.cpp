@@ -34,9 +34,13 @@
 #include "qmltypes/thumbnailprovider.h"
 #include "timelinecontroller.h"
 #include "transitions/transitionlist/model/transitiontreemodel.hpp"
-#include "utils/KoIconUtils.h"
+#include "transitions/transitionlist/model/transitionfilter.hpp"
+#include "effects/effectlist/model/effecttreemodel.hpp"
+#include "effects/effectlist/model/effectfilter.hpp"
+#include "utils/clipboardproxy.hpp"
 
 #include <KDeclarative/KDeclarative>
+#include <kdeclarative_version.h>
 // #include <QUrl>
 #include <QAction>
 #include <QQmlContext>
@@ -47,20 +51,37 @@
 
 const int TimelineWidget::comboScale[] = {1, 2, 5, 10, 25, 50, 125, 250, 500, 750, 1500, 3000, 6000, 12000};
 
-TimelineWidget::TimelineWidget(KActionCollection *actionCollection, QWidget *parent)
+TimelineWidget::TimelineWidget(QWidget *parent)
     : QQuickWidget(parent)
 {
+    KDeclarative::KDeclarative kdeclarative;
+    kdeclarative.setDeclarativeEngine(engine());
+#if KDECLARATIVE_VERSION >= QT_VERSION_CHECK(5, 45, 0)
+    kdeclarative.setupEngine(engine());
+    kdeclarative.setupContext();
+#else
+    kdeclarative.setupBindings();
+#endif
+
     registerTimelineItems();
+    // Build transition model for context menu
     m_transitionModel = TransitionTreeModel::construct(true, this);
-    m_transitionProxyModel.reset(new AssetFilter(this));
+    m_transitionProxyModel.reset(new TransitionFilter(this));
+    static_cast<TransitionFilter *>(m_transitionProxyModel.get())->setFilterType(true, TransitionType::Favorites);
     m_transitionProxyModel->setSourceModel(m_transitionModel.get());
     m_transitionProxyModel->setSortRole(AssetTreeModel::NameRole);
     m_transitionProxyModel->sort(0, Qt::AscendingOrder);
-    m_proxy = new TimelineController(actionCollection, this);
+
+    // Build effects model for context menu
+    m_effectsModel = EffectTreeModel::construct(QStringLiteral(), this);
+    m_effectsProxyModel.reset(new EffectFilter(this));
+    static_cast<EffectFilter *>(m_effectsProxyModel.get())->setFilterType(true, EffectType::Favorites);
+    m_effectsProxyModel->setSourceModel(m_effectsModel.get());
+    m_effectsProxyModel->setSortRole(AssetTreeModel::NameRole);
+    m_effectsProxyModel->sort(0, Qt::AscendingOrder);
+    m_proxy = new TimelineController(this);
     connect(m_proxy, &TimelineController::zoneMoved, this, &TimelineWidget::zoneMoved);
-    KDeclarative::KDeclarative kdeclarative;
-    kdeclarative.setDeclarativeEngine(engine());
-    kdeclarative.setupBindings();
+    connect(m_proxy, &TimelineController::ungrabHack, this, &TimelineWidget::slotUngrabHack);
     setResizeMode(QQuickWidget::SizeRootObjectToView);
     m_thumbnailer = new ThumbnailProvider;
     engine()->addImageProvider(QStringLiteral("thumbnail"), m_thumbnailer);
@@ -74,26 +95,49 @@ TimelineWidget::~TimelineWidget()
     delete m_proxy;
 }
 
+
+void TimelineWidget::updateEffectFavorites()
+{
+    rootContext()->setContextProperty("effectModel", sortedItems(KdenliveSettings::favorite_effects(), false));
+}
+
+void TimelineWidget::updateTransitionFavorites()
+{
+    rootContext()->setContextProperty("transitionModel", sortedItems(KdenliveSettings::favorite_transitions(), true));
+}
+
+const QStringList TimelineWidget::sortedItems(const QStringList &items, bool isTransition)
+{
+    QMap <QString, QString> sortedItems;
+    for (const QString & effect : items) {
+        sortedItems.insert(m_proxy->getAssetName(effect, isTransition), effect);
+    }
+    return sortedItems.values();
+}
+
 void TimelineWidget::setModel(std::shared_ptr<TimelineItemModel> model)
 {
     m_thumbnailer->resetProject();
-    auto sortModel = new QSortFilterProxyModel(this);
-    sortModel->setSourceModel(model.get());
-    sortModel->setSortRole(TimelineItemModel::SortRole);
-    sortModel->sort(0, Qt::DescendingOrder);
+    m_sortModel.reset(new QSortFilterProxyModel(this));
+    m_sortModel->setSourceModel(model.get());
+    m_sortModel->setSortRole(TimelineItemModel::SortRole);
+    m_sortModel->sort(0, Qt::DescendingOrder);
     m_proxy->setModel(model);
-    rootContext()->setContextProperty("multitrack", sortModel);
+    rootContext()->setContextProperty("multitrack", m_sortModel.get());
     rootContext()->setContextProperty("controller", model.get());
     rootContext()->setContextProperty("timeline", m_proxy);
-    rootContext()->setContextProperty("transitionModel", m_transitionProxyModel.get());
+    rootContext()->setContextProperty("transitionModel", sortedItems(KdenliveSettings::favorite_transitions(), true)); //m_transitionProxyModel.get());
+    //rootContext()->setContextProperty("effectModel", m_effectsProxyModel.get());
+    rootContext()->setContextProperty("effectModel", sortedItems(KdenliveSettings::favorite_effects(), false));
     rootContext()->setContextProperty("guidesModel", pCore->projectManager()->current()->getGuideModel().get());
+    rootContext()->setContextProperty("clipboard", new ClipboardProxy(this));
     setSource(QUrl(QStringLiteral("qrc:/qml/timeline.qml")));
     connect(rootObject(), SIGNAL(mousePosChanged(int)), pCore->window(), SLOT(slotUpdateMousePosition(int)));
     m_proxy->setRoot(rootObject());
     setVisible(true);
     loading = false;
-    m_proxy->setActiveTrack(model->getTrackIndexFromPosition(model->getTracksCount() - 1));
     m_proxy->checkDuration();
+    m_proxy->positionChanged();
 }
 
 void TimelineWidget::mousePressEvent(QMouseEvent *event)
@@ -105,19 +149,6 @@ void TimelineWidget::mousePressEvent(QMouseEvent *event)
 void TimelineWidget::slotChangeZoom(int value, bool zoomOnMouse)
 {
     m_proxy->setScaleFactorOnMouse(100.0 / comboScale[value], zoomOnMouse);
-}
-
-void TimelineWidget::wheelEvent(QWheelEvent *event)
-{
-    if ((event->modifiers() & Qt::ControlModifier) != 0u) {
-        if (event->delta() > 0) {
-            emit zoomIn(true);
-        } else {
-            emit zoomOut(true);
-        }
-    } else {
-        QQuickWidget::wheelEvent(event);
-    }
 }
 
 Mlt::Tractor *TimelineWidget::tractor()
@@ -143,4 +174,23 @@ void TimelineWidget::setTool(ProjectTool tool)
 QPoint TimelineWidget::getTracksCount() const
 {
     return m_proxy->getTracksCount();
+}
+
+void TimelineWidget::slotUngrabHack()
+{
+    // Workaround bug: https://bugreports.qt.io/browse/QTBUG-59044
+    // https://phabricator.kde.org/D5515
+    if (quickWindow() && quickWindow()->mouseGrabberItem()) {
+        quickWindow()->mouseGrabberItem()->ungrabMouse();
+    }
+}
+
+int TimelineWidget::zoomForScale(double value) const
+{
+    int scale = 100.0 / value;
+    int ix = 13;
+    while(comboScale[ix] > scale && ix > 0) {
+        ix --;
+    }
+    return ix;
 }

@@ -68,7 +68,8 @@ void AbstractProjectItem::setRefCount(uint count)
 {
     m_usage = count;
     if (auto ptr = m_model.lock())
-        std::static_pointer_cast<ProjectItemModel>(ptr)->onItemUpdated(std::static_pointer_cast<AbstractProjectItem>(shared_from_this()), AbstractProjectItem::UsageCount);
+        std::static_pointer_cast<ProjectItemModel>(ptr)->onItemUpdated(std::static_pointer_cast<AbstractProjectItem>(shared_from_this()),
+                                                                       AbstractProjectItem::UsageCount);
 }
 
 uint AbstractProjectItem::refCount() const
@@ -80,14 +81,16 @@ void AbstractProjectItem::addRef()
 {
     m_usage++;
     if (auto ptr = m_model.lock())
-        std::static_pointer_cast<ProjectItemModel>(ptr)->onItemUpdated(std::static_pointer_cast<AbstractProjectItem>(shared_from_this()), AbstractProjectItem::UsageCount);
+        std::static_pointer_cast<ProjectItemModel>(ptr)->onItemUpdated(std::static_pointer_cast<AbstractProjectItem>(shared_from_this()),
+                                                                       AbstractProjectItem::UsageCount);
 }
 
 void AbstractProjectItem::removeRef()
 {
     m_usage--;
     if (auto ptr = m_model.lock())
-        std::static_pointer_cast<ProjectItemModel>(ptr)->onItemUpdated(std::static_pointer_cast<AbstractProjectItem>(shared_from_this()), AbstractProjectItem::UsageCount);
+        std::static_pointer_cast<ProjectItemModel>(ptr)->onItemUpdated(std::static_pointer_cast<AbstractProjectItem>(shared_from_this()),
+                                                                       AbstractProjectItem::UsageCount);
 }
 
 const QString &AbstractProjectItem::clipId() const
@@ -133,6 +136,9 @@ QVariant AbstractProjectItem::getData(DataType type) const
     case DataDuration:
         data = QVariant(m_duration);
         break;
+    case DataInPoint:
+        data = QVariant(m_inPoint);
+        break;
     case DataDate:
         data = QVariant(m_date);
         break;
@@ -176,18 +182,15 @@ QVariant AbstractProjectItem::getData(DataType type) const
             }
         }
         break;
-    case JobMessage:
+    case JobSuccess:
         if (itemType() == ClipItem) {
-            QString messages;
-            auto jobIds = pCore->jobManager()->getPendingJobsIds(clipId());
-            for (int job : jobIds) {
-                messages.append(pCore->jobManager()->getJobMessageForClip(job, clipId()));
+            auto jobIds = pCore->jobManager()->getFinishedJobsIds(clipId());
+            if (jobIds.size() > 0) {
+                // Check the last job status
+                data = QVariant(pCore->jobManager()->jobSucceded(jobIds[jobIds.size() - 1]));
+            } else {
+                data = QVariant(true);
             }
-            jobIds = pCore->jobManager()->getFinishedJobsIds(clipId());
-            for (int job : jobIds) {
-                messages.append(pCore->jobManager()->getJobMessageForClip(job, clipId()));
-            }
-            data = QVariant(messages);
         }
         break;
     case ClipStatus:
@@ -282,7 +285,7 @@ QString AbstractProjectItem::lastParentId() const
 
 void AbstractProjectItem::updateParent(std::shared_ptr<TreeItem> newParent)
 {
-    //bool reload = !m_lastParentId.isEmpty();
+    // bool reload = !m_lastParentId.isEmpty();
     m_lastParentId.clear();
     if (newParent) {
         m_lastParentId = std::static_pointer_cast<AbstractProjectItem>(newParent)->clipId();

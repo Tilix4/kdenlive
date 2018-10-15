@@ -22,7 +22,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "titletemplatedialog.h"
 #include "doc/kthumb.h"
 #include "kdenlivesettings.h"
-#include "utils/KoIconUtils.h"
+
 
 #include "klocalizedstring.h"
 #include <KComboBox>
@@ -64,7 +64,8 @@ TitleTemplateDialog::TitleTemplateDialog(const QString &folder, QWidget *parent)
     }
     const QStringList mimeTypeFilters = {QStringLiteral("application/x-kdenlivetitle")};
     m_view.template_list->setFilter(mimeTypeFilters.join(' '));
-    connect(m_view.template_list->comboBox(), static_cast<void(KComboBox::*)(int)>(&KComboBox::currentIndexChanged), this, &TitleTemplateDialog::updatePreview);
+    connect(m_view.template_list->comboBox(), static_cast<void (KComboBox::*)(int)>(&KComboBox::currentIndexChanged), this,
+            &TitleTemplateDialog::updatePreview);
     updatePreview();
 }
 

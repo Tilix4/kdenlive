@@ -30,24 +30,11 @@ DoubleParamWidget::DoubleParamWidget(std::shared_ptr<AssetParameterModel> model,
     , m_doubleWidget(nullptr)
 {
     m_lay = new QVBoxLayout(this);
-    m_lay->setContentsMargins(4, 0, 4, 0);
+    m_lay->setContentsMargins(0, 0, 0, 0);
+    m_lay->setSpacing(0);
     QLocale locale;
     locale.setNumberOptions(QLocale::OmitGroupSeparator);
 
-    // Construct object
-    slotRefresh();
-}
-
-void DoubleParamWidget::slotRefresh()
-{
-    // A double paramwidget is not too expansive to create, we can afford to recreate it from scratch
-    delete m_lay;
-    delete m_doubleWidget;
-
-    QLocale locale;
-    locale.setNumberOptions(QLocale::OmitGroupSeparator);
-    m_lay = new QVBoxLayout(this);
-    m_lay->setContentsMargins(4, 0, 4, 0);
     // Retrieve parameters from the model
     QString name = m_model->data(m_index, Qt::DisplayRole).toString();
     double value = locale.toDouble(m_model->data(m_index, AssetParameterModel::ValueRole).toString());
@@ -59,17 +46,24 @@ void DoubleParamWidget::slotRefresh()
     int decimals = m_model->data(m_index, AssetParameterModel::DecimalsRole).toInt();
     double factor = m_model->data(m_index, AssetParameterModel::FactorRole).toDouble();
     // Construct object
-    m_doubleWidget = new DoubleWidget(name, value, min, max, defaultValue, comment, -1, suffix, decimals, this);
-    m_doubleWidget->factor = factor;
+    m_doubleWidget = new DoubleWidget(name, value, min, max, factor, defaultValue, comment, -1, suffix, decimals, this);
     m_lay->addWidget(m_doubleWidget);
 
     // Connect signal
     connect(m_doubleWidget, &DoubleWidget::valueChanged,
-            [this, locale](double val) { emit valueChanged(m_index, locale.toString(val / m_doubleWidget->factor), true); });
+            [this, locale](double val) { emit valueChanged(m_index, locale.toString(val), true); });
+    slotRefresh();
+}
+
+void DoubleParamWidget::slotRefresh()
+{
+    QLocale locale;
+    locale.setNumberOptions(QLocale::OmitGroupSeparator);
+    double value = locale.toDouble(m_model->data(m_index, AssetParameterModel::ValueRole).toString());
+    m_doubleWidget->setValue(value);
 }
 
 void DoubleParamWidget::slotShowComment(bool show)
 {
     m_doubleWidget->slotShowComment(show);
 }
-

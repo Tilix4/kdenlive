@@ -50,12 +50,11 @@ class QToolButton;
 class QmlManager;
 class GLWidget;
 class MonitorAudioLevel;
-class MonitorController;
 
 namespace Mlt {
 class Profile;
 class Filter;
-}
+} // namespace Mlt
 
 class QuickEventEater : public QObject
 {
@@ -93,6 +92,8 @@ public:
     Monitor(Kdenlive::MonitorId id, MonitorManager *manager, QWidget *parent = nullptr);
     ~Monitor();
     void resetProfile();
+    /** @brief Rebuild consumers after a property change */
+    void resetConsumer(bool fullReset);
     void setCustomProfile(const QString &profile, const Timecode &tc);
     void setupMenu(QMenu *goMenu, QMenu *overlayMenu, QAction *playZone, QAction *loopZone, QMenu *markerMenu = nullptr, QAction *loopClip = nullptr);
     const QString sceneList(const QString &root, const QString &fullPath = QString());
@@ -153,9 +154,15 @@ public:
     /** @brief Clear monitor display **/
     void clearDisplay();
     void setProducer(Mlt::Producer *producer, int pos = -1);
-   void reconfigure();
+    void reconfigure();
     /** @brief Saves current monitor frame to an image file, and add it to project if addToProject is set to true **/
     void slotExtractCurrentFrame(QString frameName = QString(), bool addToProject = false);
+    /** @brief Zoom in active monitor */
+    void slotZoomIn();
+    /** @brief Zoom out active monitor */
+    void slotZoomOut();
+    /** @brief Set a property on the MLT consumer */
+    void setConsumerProperty(const QString &name, const QString &value);
 
 protected:
     void mousePressEvent(QMouseEvent *event) override;
@@ -174,7 +181,6 @@ protected:
     void enterEvent(QEvent *event) override;
     void leaveEvent(QEvent *event) override;
     virtual QStringList mimeTypes() const;
-    MonitorController *m_monitorController;
 
 private:
     std::shared_ptr<ProjectClip> m_controller;
@@ -229,8 +235,6 @@ private:
     void adjustScrollBars(float horizontal, float vertical);
     void loadQmlScene(MonitorSceneType type);
     void updateQmlDisplay(int currentOverlay);
-    /** @brief Connect qml on monitor toolbar buttons */
-    void connectQmlToolbar(QQuickItem *root);
     /** @brief Check and display dropped frames */
     void checkDrops(int dropped);
     /** @brief Create temporary Mlt::Tractor holding a clip and it's effectless clone */
@@ -262,14 +266,10 @@ private slots:
     void slotEditInlineMarker();
     /** @brief Pass keypress event to mainwindow */
     void doKeyPressEvent(QKeyEvent *);
-    /** @brief The timecode was updated, refresh qml display */
-    void slotUpdateQmlTimecode(const QString &tc);
     /** @brief There was an error initializing Movit */
     void gpuError();
     void setOffsetX(int x);
     void setOffsetY(int y);
-    /** @brief Show/hide monitor zoom */
-    void slotEnableSceneZoom(bool enable);
     /** @brief Pan monitor view */
     void panView(QPoint diff);
     /** @brief Project monitor zone changed, inform timeline */
@@ -328,7 +328,7 @@ public slots:
     void requestSeek(int pos);
     /** @brief Check current position to show relevant infos in qml view (markers, zone in/out, etc). */
     void checkOverlay(int pos = -1);
-    void refreshMonitorIfActive() override;
+    void refreshMonitorIfActive(bool directUpdate = false) override;
 
 signals:
     void seekPosition(int);
@@ -345,8 +345,7 @@ signals:
     void extractZone(const QString &id);
     void effectChanged(const QRect &);
     void effectPointsChanged(const QVariantList &);
-    void addKeyframe();
-    void deleteKeyframe();
+    void addRemoveKeyframe();
     void seekToNextKeyframe();
     void seekToPreviousKeyframe();
     void seekToKeyframe(int);

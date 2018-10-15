@@ -36,7 +36,7 @@ class ProjectManager;
 namespace Mlt {
 class Repository;
 class Profile;
-}
+} // namespace Mlt
 
 #define EXIT_RESTART (42)
 #define pCore Core::self()
@@ -170,6 +170,8 @@ public:
     void showClipKeyframes(ObjectId id, bool enable);
     Mlt::Profile *thumbProfile();
     void clearSelection();
+    /** @brief Returns the current project duration */
+    int projectDuration() const;
 
 private:
     explicit Core();
@@ -192,6 +194,11 @@ private:
     QString m_profile;
     std::unique_ptr<Mlt::Profile> m_thumbProfile;
     bool m_guiConstructed = false;
+
+public slots:
+    void triggerAction(const QString &name);
+    /** @brief display a user info/warning message in the project bin */
+    void displayBinMessage(const QString &text, int type, const QList<QAction *> &actions = QList<QAction *>());
 
 signals:
     void coreIsReady();

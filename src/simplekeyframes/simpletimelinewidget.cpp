@@ -39,7 +39,7 @@ SimpleTimelineWidget::SimpleTimelineWidget(QWidget *parent)
     setSizePolicy(QSizePolicy(QSizePolicy::Expanding, QSizePolicy::Maximum));
     setFont(QFontDatabase::systemFont(QFontDatabase::SmallestReadableFont));
     QPalette p = palette();
-    KColorScheme scheme(p.currentColorGroup(), KColorScheme::Window, KSharedConfig::openConfig(KdenliveSettings::colortheme()));
+    KColorScheme scheme(p.currentColorGroup(), KColorScheme::Window);
     m_colSelected = palette().highlight().color();
     m_colKeyframe = scheme.foreground(KColorScheme::NormalText).color();
     m_size = QFontInfo(font()).pixelSize() * 1.8;
@@ -262,7 +262,7 @@ void SimpleTimelineWidget::mouseDoubleClickEvent(QMouseEvent *event)
 
 void SimpleTimelineWidget::wheelEvent(QWheelEvent *event)
 {
-    int change = event->delta() < 0 ? -1 : 1;
+    int change = event->delta() < 0 ? 1 : -1;
     /*if (m_currentKeyframe > 0) {
         m_currentKeyframe = qBound(0, m_currentKeyframe + change, m_duration);
         emit keyframeMoved(m_currentKeyframeOriginal, m_currentKeyframe);

@@ -20,15 +20,19 @@
 #include "abstractparamwidget.hpp"
 #include "assets/model/assetparametermodel.hpp"
 #include "boolparamwidget.hpp"
-#include "switchparamwidget.hpp"
-#include "lumaliftgainparam.hpp"
+#include "coloreditwidget.hpp"
 #include "doubleparamwidget.hpp"
 #include "geometryeditwidget.hpp"
 #include "keyframewidget.hpp"
 #include "listparamwidget.h"
+#include "lumaliftgainparam.hpp"
 #include "positioneditwidget.hpp"
-#include "coloreditwidget.hpp"
+#include "curves/bezier/beziersplineeditor.h"
+#include "curves/cubic/kis_cubic_curve.h"
+#include "curves/cubic/kis_curve_widget.h"
+#include "curves/curveparamwidget.h"
 #include "slidewidget.hpp"
+#include "switchparamwidget.hpp"
 #include "urlparamwidget.hpp"
 
 #include <QLabel>
@@ -82,6 +86,7 @@ AbstractParamWidget *AbstractParamWidget::construct(const std::shared_ptr<AssetP
         break;
     case ParamType::KeyframeParam:
     case ParamType::AnimatedRect:
+    case ParamType::Roto_spline:
         widget = new KeyframeWidget(model, index, parent);
         break;
     case ParamType::Geometry:
@@ -105,6 +110,18 @@ AbstractParamWidget *AbstractParamWidget::construct(const std::shared_ptr<AssetP
     case ParamType::Url:
         widget = new UrlParamWidget(model, index, parent);
         break;
+    case ParamType::Bezier_spline:
+    {
+        using Widget_t = CurveParamWidget<BezierSplineEditor>;
+        widget = new Widget_t(model, index, parent);
+        break;
+    }
+    case ParamType::Curve:
+    {
+        using Widget_t = CurveParamWidget<KisCurveWidget>;
+        widget = new Widget_t(model, index, parent);
+        break;
+    }
     case ParamType::Animated:
     case ParamType::RestrictedAnim:
     //        widget = new AnimationWidget(model, index, range, parent);
@@ -113,9 +130,6 @@ AbstractParamWidget *AbstractParamWidget::construct(const std::shared_ptr<AssetP
     //        widget = new KeyframeEdit(model, index, parent);
     //        break;
     case ParamType::Addedgeometry:
-    case ParamType::Curve:
-    case ParamType::Bezier_spline:
-    case ParamType::Roto_spline:
     case ParamType::Keywords:
     case ParamType::Fontfamily:
     case ParamType::Filterjob:

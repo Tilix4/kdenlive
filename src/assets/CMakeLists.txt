@@ -5,6 +5,10 @@ set(kdenlive_SRCS
   assets/assetlist/model/assetfilter.cpp
   assets/assetlist/model/assettreemodel.cpp
   assets/assetpanel.cpp
+  assets/keyframes/model/rotoscoping/bpoint.cpp
+  assets/keyframes/model/keyframemonitorhelper.cpp
+  assets/keyframes/model/rotoscoping/rotohelper.cpp
+  assets/keyframes/model/corners/cornershelper.cpp
   assets/keyframes/model/keyframemodel.cpp
   assets/keyframes/model/keyframemodellist.cpp
   assets/keyframes/view/keyframeview.cpp
@@ -26,5 +30,14 @@ set(kdenlive_SRCS
   assets/view/widgets/geometryeditwidget.cpp
   assets/view/widgets/positioneditwidget.cpp
   assets/view/widgets/coloreditwidget.cpp
+
+  # curves widget
+  assets/view/widgets/curves/abstractcurvewidget.h
+  assets/view/widgets/curves/bezier/beziersplineeditor.cpp
+  assets/view/widgets/curves/bezier/bpoint.cpp
+  assets/view/widgets/curves/bezier/cubicbezierspline.cpp
+  assets/view/widgets/curves/cubic/kis_curve_widget.cpp
+  assets/view/widgets/curves/cubic/kis_cubic_curve.cpp
   PARENT_SCOPE)
+
 

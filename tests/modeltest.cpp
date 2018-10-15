@@ -120,6 +120,8 @@ TEST_CASE("Basic creation/deletion of a track", "[TrackModel]")
         REQUIRE(timeline->getTracksCount() == 1);
         REQUIRE(timeline->checkConsistency());
     }
+    binModel->clean();
+    pCore->m_projectManager = nullptr;
 }
 
 TEST_CASE("Basic creation/deletion of a clip", "[ClipModel]")
@@ -165,6 +167,8 @@ TEST_CASE("Basic creation/deletion of a clip", "[ClipModel]")
     REQUIRE(timeline->requestItemDeletion(id1));
     REQUIRE(timeline->checkConsistency());
     REQUIRE(timeline->getClipsCount() == 0);
+    binModel->clean();
+    pCore->m_projectManager = nullptr;
 }
 
 TEST_CASE("Clip manipulation", "[ClipModel]")
@@ -783,6 +787,121 @@ TEST_CASE("Clip manipulation", "[ClipModel]")
         state(tid6);
     }
 
+    SECTION("Movement of AV groups")
+    {
+        int tid6b = TrackModel::construct(timeline, -1, -1, QString(), true);
+        int tid6 = TrackModel::construct(timeline, -1, -1, QString(), true);
+        int tid5 = TrackModel::construct(timeline);
+        int tid5b = TrackModel::construct(timeline);
+
+        QString binId3 = createProducerWithSound(profile_model, binModel);
+
+        int cid6 = -1;
+        REQUIRE(timeline->requestClipInsertion(binId3, tid5, 3, cid6, true, true, false));
+        int cid7 = timeline->m_groups->getSplitPartner(cid6);
+
+        auto state = [&](int pos) {
+            REQUIRE(timeline->checkConsistency());
+            REQUIRE(timeline->getTrackClipsCount(tid5) == 1);
+            REQUIRE(timeline->getTrackClipsCount(tid6) == 1);
+            REQUIRE(timeline->getClipTrackId(cid6) == tid5);
+            REQUIRE(timeline->getClipTrackId(cid7) == tid6);
+            REQUIRE(timeline->getClipPosition(cid6) == pos);
+            REQUIRE(timeline->getClipPosition(cid7) == pos);
+            REQUIRE(timeline->getClipPtr(cid6)->clipState() == PlaylistState::VideoOnly);
+            REQUIRE(timeline->getClipPtr(cid7)->clipState() == PlaylistState::AudioOnly);
+        };
+        state(3);
+
+        // simple translation on the right
+        REQUIRE(timeline->requestClipMove(cid6, tid5, 10, true, true, true));
+
+        state(10);
+        undoStack->undo();
+        state(3);
+        undoStack->redo();
+        state(10);
+
+        // simple translation on the left, moving the audio clip this time
+        REQUIRE(timeline->requestClipMove(cid7, tid6, 1, true, true, true));
+        state(1);
+        undoStack->undo();
+        state(10);
+        undoStack->redo();
+        state(1);
+
+        // change track, moving video
+        REQUIRE(timeline->requestClipMove(cid6, tid5b, 7, true, true, true));
+        auto state2 = [&](int pos) {
+            REQUIRE(timeline->checkConsistency());
+            REQUIRE(timeline->getTrackClipsCount(tid5b) == 1);
+            REQUIRE(timeline->getTrackClipsCount(tid6b) == 1);
+            REQUIRE(timeline->getClipTrackId(cid6) == tid5b);
+            REQUIRE(timeline->getClipTrackId(cid7) == tid6b);
+            REQUIRE(timeline->getClipPosition(cid6) == pos);
+            REQUIRE(timeline->getClipPosition(cid7) == pos);
+            REQUIRE(timeline->getClipPtr(cid6)->clipState() == PlaylistState::VideoOnly);
+            REQUIRE(timeline->getClipPtr(cid7)->clipState() == PlaylistState::AudioOnly);
+        };
+        state2(7);
+        undoStack->undo();
+        state(1);
+        undoStack->redo();
+        state2(7);
+
+        // change track, moving audio
+        REQUIRE(timeline->requestClipMove(cid7, tid6b, 2, true, true, true));
+        state2(2);
+        undoStack->undo();
+        state2(7);
+        undoStack->redo();
+        state2(2);
+
+        undoStack->undo();
+        undoStack->undo();
+        state(1);
+
+        // Switching audio and video, going to the extra track
+        REQUIRE(timeline->requestClipMove(cid7, tid5b, 2, true, true, true));
+        auto state3 = [&](int pos) {
+            REQUIRE(timeline->checkConsistency());
+            REQUIRE(timeline->getTrackClipsCount(tid5b) == 1);
+            REQUIRE(timeline->getTrackClipsCount(tid6b) == 1);
+            REQUIRE(timeline->getClipTrackId(cid6) == tid6b);
+            REQUIRE(timeline->getClipTrackId(cid7) == tid5b);
+            REQUIRE(timeline->getClipPosition(cid6) == pos);
+            REQUIRE(timeline->getClipPosition(cid7) == pos);
+            REQUIRE(timeline->getClipPtr(cid7)->clipState() == PlaylistState::VideoOnly);
+            REQUIRE(timeline->getClipPtr(cid6)->clipState() == PlaylistState::AudioOnly);
+        };
+        state3(2);
+        undoStack->undo();
+        state(1);
+        undoStack->redo();
+        state3(2);
+        undoStack->undo();
+        state(1);
+
+        // Switching audio and video, switching tracks in place
+        REQUIRE(timeline->requestClipMove(cid6, tid6, 1, true, true, true));
+        auto state4 = [&](int pos) {
+            REQUIRE(timeline->checkConsistency());
+            REQUIRE(timeline->getTrackClipsCount(tid5) == 1);
+            REQUIRE(timeline->getTrackClipsCount(tid6) == 1);
+            REQUIRE(timeline->getClipTrackId(cid6) == tid6);
+            REQUIRE(timeline->getClipTrackId(cid7) == tid5);
+            REQUIRE(timeline->getClipPosition(cid6) == pos);
+            REQUIRE(timeline->getClipPosition(cid7) == pos);
+            REQUIRE(timeline->getClipPtr(cid7)->clipState() == PlaylistState::VideoOnly);
+            REQUIRE(timeline->getClipPtr(cid6)->clipState() == PlaylistState::AudioOnly);
+        };
+        state4(1);
+        undoStack->undo();
+        state(1);
+        undoStack->redo();
+        state4(1);
+    }
+
     SECTION("Clip copy")
     {
         int cid6 = ClipModel::construct(timeline, binId, -1, PlaylistState::VideoOnly);
@@ -798,6 +917,8 @@ TEST_CASE("Clip manipulation", "[ClipModel]")
         REQUIRE(timeline->m_allClips[cid6]->binId() == timeline->m_allClips[newId]->binId());
         // TODO check effects
     }
+    binModel->clean();
+    pCore->m_projectManager = nullptr;
 }
 
 TEST_CASE("Check id unicity", "[ClipModel]")
@@ -852,6 +973,8 @@ TEST_CASE("Check id unicity", "[ClipModel]")
     REQUIRE(timeline->checkConsistency());
     REQUIRE(all_ids.size() == nbr);
     REQUIRE(all_ids.size() != track_ids.size());
+    binModel->clean();
+    pCore->m_projectManager = nullptr;
 }
 
 TEST_CASE("Undo and Redo", "[ClipModel]")
@@ -1021,7 +1144,8 @@ TEST_CASE("Undo and Redo", "[ClipModel]")
         REQUIRE(timeline->getClipTrackId(cid1) == tid1);
         REQUIRE(timeline->getClipPosition(cid1) == 0);
         REQUIRE(undoStack->index() == init_index + 2);
-        CHECK_MOVE(Once);
+        // Move on same track does not trigger insert/remove row
+        CHECK_MOVE(0);
 
         undoStack->undo();
         REQUIRE(timeline->checkConsistency());
@@ -1029,7 +1153,7 @@ TEST_CASE("Undo and Redo", "[ClipModel]")
         REQUIRE(timeline->getClipTrackId(cid1) == tid1);
         REQUIRE(timeline->getClipPosition(cid1) == 5);
         REQUIRE(undoStack->index() == init_index + 1);
-        CHECK_MOVE(Once);
+        CHECK_MOVE(0);
 
         undoStack->redo();
         REQUIRE(timeline->checkConsistency());
@@ -1037,7 +1161,7 @@ TEST_CASE("Undo and Redo", "[ClipModel]")
         REQUIRE(timeline->getClipTrackId(cid1) == tid1);
         REQUIRE(timeline->getClipPosition(cid1) == 0);
         REQUIRE(undoStack->index() == init_index + 2);
-        CHECK_MOVE(Once);
+        CHECK_MOVE(0);
 
         undoStack->undo();
         REQUIRE(timeline->checkConsistency());
@@ -1045,7 +1169,7 @@ TEST_CASE("Undo and Redo", "[ClipModel]")
         REQUIRE(timeline->getClipTrackId(cid1) == tid1);
         REQUIRE(timeline->getClipPosition(cid1) == 5);
         REQUIRE(undoStack->index() == init_index + 1);
-        CHECK_MOVE(Once);
+        CHECK_MOVE(0);
 
         REQUIRE(timeline->requestClipMove(cid1, tid1, 2 * length));
         REQUIRE(timeline->checkConsistency());
@@ -1053,7 +1177,7 @@ TEST_CASE("Undo and Redo", "[ClipModel]")
         REQUIRE(timeline->getClipTrackId(cid1) == tid1);
         REQUIRE(timeline->getClipPosition(cid1) == 2 * length);
         REQUIRE(undoStack->index() == init_index + 2);
-        CHECK_MOVE(Once);
+        CHECK_MOVE(0);
 
         undoStack->undo();
         REQUIRE(timeline->checkConsistency());
@@ -1061,7 +1185,7 @@ TEST_CASE("Undo and Redo", "[ClipModel]")
         REQUIRE(timeline->getClipTrackId(cid1) == tid1);
         REQUIRE(timeline->getClipPosition(cid1) == 5);
         REQUIRE(undoStack->index() == init_index + 1);
-        CHECK_MOVE(Once);
+        CHECK_MOVE(0);
 
         undoStack->redo();
         REQUIRE(timeline->checkConsistency());
@@ -1069,10 +1193,10 @@ TEST_CASE("Undo and Redo", "[ClipModel]")
         REQUIRE(timeline->getClipTrackId(cid1) == tid1);
         REQUIRE(timeline->getClipPosition(cid1) == 2 * length);
         REQUIRE(undoStack->index() == init_index + 2);
-        CHECK_MOVE(Once);
+        CHECK_MOVE(0);
 
         undoStack->undo();
-        CHECK_MOVE(Once);
+        CHECK_MOVE(0);
         undoStack->undo();
         REQUIRE(timeline->checkConsistency());
         REQUIRE(timeline->getTrackClipsCount(tid1) == 0);
@@ -1432,6 +1556,8 @@ TEST_CASE("Undo and Redo", "[ClipModel]")
         undoStack->redo();
         state4();
     }
+    binModel->clean();
+    pCore->m_projectManager = nullptr;
 }
 
 TEST_CASE("Snapping", "[Snapping]")
@@ -1542,15 +1668,18 @@ TEST_CASE("Snapping", "[Snapping]")
         REQUIRE(timeline->requestClipMove(cid2, tid2, 0));
         for (int snap = -1; snap <= 5; ++snap) {
             for (int perturb = 0; perturb <= 6; ++perturb) {
+                // snap to beginning
                 check_snap(beg, perturb, snap);
                 check_snap(beg + length, perturb, snap);
+                // snap to end
                 check_snap(beg - length2, perturb, snap);
                 check_snap(beg + length - length2, perturb, snap);
                 REQUIRE(timeline->checkConsistency());
-                REQUIRE(timeline->getClipPosition(cid2) == 0);
             }
         }
     }
+    binModel->clean();
+    pCore->m_projectManager = nullptr;
 }
 
 TEST_CASE("Advanced trimming operations", "[Trimming]")
@@ -1586,6 +1715,8 @@ TEST_CASE("Advanced trimming operations", "[Trimming]")
     int tid1 = TrackModel::construct(timeline);
     int tid2 = TrackModel::construct(timeline);
     int tid3 = TrackModel::construct(timeline);
+    // Add an audio track
+    int tid4 = TrackModel::construct(timeline, -1, -1, QString(), true);
     int cid2 = ClipModel::construct(timeline, binId2, -1, PlaylistState::VideoOnly);
     int cid3 = ClipModel::construct(timeline, binId, -1, PlaylistState::VideoOnly);
     int cid4 = ClipModel::construct(timeline, binId, -1, PlaylistState::VideoOnly);
@@ -1869,8 +2000,8 @@ TEST_CASE("Advanced trimming operations", "[Trimming]")
         };
         state();
 
-        REQUIRE(TimelineFunctions::requestSplitAudio(timeline, audio1, tid2));
-        int splitted1 = timeline->getClipByPosition(tid2, 3);
+        REQUIRE(TimelineFunctions::requestSplitAudio(timeline, audio1, tid4));
+        int splitted1 = timeline->getClipByPosition(tid4, 3);
         auto state2 = [&]() {
             REQUIRE(timeline->checkConsistency());
             REQUIRE(timeline->getClipPlaytime(audio1) == l);
@@ -1878,9 +2009,9 @@ TEST_CASE("Advanced trimming operations", "[Trimming]")
             REQUIRE(timeline->getClipPlaytime(splitted1) == l);
             REQUIRE(timeline->getClipPosition(splitted1) == 3);
             REQUIRE(timeline->getClipTrackId(audio1) == tid1);
-            REQUIRE(timeline->getClipTrackId(splitted1) == tid2);
+            REQUIRE(timeline->getClipTrackId(splitted1) == tid4);
             REQUIRE(timeline->getTrackClipsCount(tid1) == 1);
-            REQUIRE(timeline->getTrackClipsCount(tid2) == 1);
+            REQUIRE(timeline->getTrackClipsCount(tid4) == 1);
 
             REQUIRE(timeline->getGroupElements(audio1) == std::unordered_set<int>({audio1, splitted1}));
 
@@ -1901,10 +2032,11 @@ TEST_CASE("Advanced trimming operations", "[Trimming]")
         state2();
 
         // We also make sure that clips that are audio only cannot be further splitted
-        REQUIRE(timeline->requestClipMove(cid1, tid1, 30));
+        REQUIRE(timeline->requestClipMove(cid1, tid1, l + 30));
         // This is a color clip, shouldn't be splittable
         REQUIRE_FALSE(TimelineFunctions::requestSplitAudio(timeline, cid1, tid2));
-        REQUIRE_FALSE(TimelineFunctions::requestSplitAudio(timeline, splitted1, tid2));
+        // Check we cannot split audio on a video track
+        REQUIRE_FALSE(TimelineFunctions::requestSplitAudio(timeline, audio1, tid2));
     }
     SECTION("Split audio on a selection")
     {
@@ -1940,10 +2072,10 @@ TEST_CASE("Advanced trimming operations", "[Trimming]")
         };
         state();
 
-        REQUIRE(TimelineFunctions::requestSplitAudio(timeline, audio1, tid2));
-        int splitted1 = timeline->getClipByPosition(tid2, 0);
-        int splitted2 = timeline->getClipByPosition(tid2, l);
-        int splitted3 = timeline->getClipByPosition(tid2, 2 * l);
+        REQUIRE(TimelineFunctions::requestSplitAudio(timeline, audio1, tid4));
+        int splitted1 = timeline->getClipByPosition(tid4, 0);
+        int splitted2 = timeline->getClipByPosition(tid4, l);
+        int splitted3 = timeline->getClipByPosition(tid4, 2 * l);
         auto state2 = [&]() {
             REQUIRE(timeline->checkConsistency());
             REQUIRE(timeline->getClipPlaytime(audio1) == l);
@@ -1961,11 +2093,11 @@ TEST_CASE("Advanced trimming operations", "[Trimming]")
             REQUIRE(timeline->getClipTrackId(audio1) == tid1);
             REQUIRE(timeline->getClipTrackId(audio2) == tid1);
             REQUIRE(timeline->getClipTrackId(audio3) == tid1);
-            REQUIRE(timeline->getClipTrackId(splitted1) == tid2);
-            REQUIRE(timeline->getClipTrackId(splitted2) == tid2);
-            REQUIRE(timeline->getClipTrackId(splitted3) == tid2);
+            REQUIRE(timeline->getClipTrackId(splitted1) == tid4);
+            REQUIRE(timeline->getClipTrackId(splitted2) == tid4);
+            REQUIRE(timeline->getClipTrackId(splitted3) == tid4);
             REQUIRE(timeline->getTrackClipsCount(tid1) == 3);
-            REQUIRE(timeline->getTrackClipsCount(tid2) == 3);
+            REQUIRE(timeline->getTrackClipsCount(tid4) == 3);
 
             REQUIRE(timeline->getGroupElements(audio1) == std::unordered_set<int>({audio1, splitted1, audio2, audio3, splitted2, splitted3}));
 
@@ -1997,4 +2129,6 @@ TEST_CASE("Advanced trimming operations", "[Trimming]")
         undoStack->redo();
         state2();
     }
+    binModel->clean();
+    pCore->m_projectManager = nullptr;
 }

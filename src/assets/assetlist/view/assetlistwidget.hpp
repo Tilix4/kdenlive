@@ -45,6 +45,12 @@ public:
     /* @brief Returns the name of the asset given its model index */
     QString getName(const QModelIndex &index) const;
 
+    /* @brief Returns true if this effect belongs to favorites */
+    bool isFavorite(const QModelIndex &index) const;
+
+    /* @brief Returns true if this effect belongs to favorites */
+    void setFavorite(const QModelIndex &index, bool favorite = true);
+
     /* @brief Returns the description of the asset given its model index */
     QString getDescription(const QModelIndex &index) const;
 
@@ -58,6 +64,9 @@ public:
     QVariantMap getMimeData(const QString &assetId) const;
 
     void activate(const QModelIndex &ix);
+
+    /* @brief Rebuild the view by resetting the source. Is there a better way? */
+    void reset();
 
 protected:
     void setup();

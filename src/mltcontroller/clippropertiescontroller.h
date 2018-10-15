@@ -26,6 +26,8 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "timecode.h"
 
 #include <QString>
+#include <QTreeWidget>
+
 #include <mlt++/Mlt.h>
 
 class ClipController;
@@ -92,12 +94,11 @@ private:
     QLabel *m_clipLabel;
     Timecode m_tc;
     QString m_id;
-    ClipType m_type;
+    ClipType::ProducerType m_type;
     Mlt::Properties m_properties;
     QMap<QString, QString> m_originalProperties;
     QMap<QString, QString> m_clipProperties;
     QTreeWidget *m_propertiesTree;
-    QWidget *m_forcePage;
     QWidget *m_propertiesPage;
     QWidget *m_markersPage;
     QWidget *m_metaPage;
@@ -116,6 +117,10 @@ signals:
     void seekToFrame(int);
     void editAnalysis(const QString &id, const QString &name, const QString &value);
     void editClip();
+    void requestProxy(bool doProxy);
+    void proxyModified(const QString &);
+    void deleteProxy();
+    void enableProxy(bool);
 };
 
 #endif

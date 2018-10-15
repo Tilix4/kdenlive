@@ -30,7 +30,7 @@
 #include <memory>
 
 /* @brief This is the base class for objects that can move, for example clips and compositions
-*/
+ */
 template <typename Service> class MoveableItem
 {
     MoveableItem() = delete;
@@ -60,8 +60,8 @@ public:
     /* @brief returns the in and out times of the item
      */
     std::pair<int, int> getInOut() const;
-    int getIn() const;
-    int getOut() const;
+    virtual int getIn() const;
+    virtual int getOut() const;
 
     friend class TrackModel;
     friend class TimelineModel;
@@ -77,9 +77,9 @@ public:
      */
     virtual const QString getProperty(const QString &name) const = 0;
 
-    /* @brief true if the item is in current selection and should be moved within a group
-     */
-    bool isInGroupDrag;
+    /* Set if the item is in grab state */
+    bool isGrabbed() const;
+    void setGrab(bool grab);
 
 protected:
     /* @brief Returns a pointer to the service. It may be used but do NOT store it*/
@@ -106,7 +106,7 @@ protected:
        If you whish to actually change the track the item, use the slot in the timeline
        slot.
     */
-    void setCurrentTrackId(int tid);
+    virtual void setCurrentTrackId(int tid);
 
     /* Set in and out of service */
     virtual void setInOut(int in, int out);
@@ -116,6 +116,7 @@ protected:
     int m_id; // this is the creation id of the item, used for book-keeping
     int m_position;
     int m_currentTrackId;
+    bool m_grabbed;
     mutable QReadWriteLock m_lock; // This is a lock that ensures safety in case of concurrent access
 };
 

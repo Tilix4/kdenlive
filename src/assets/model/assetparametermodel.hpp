@@ -72,7 +72,7 @@ class AssetParameterModel : public QAbstractListModel, public enable_shared_from
 public:
     explicit AssetParameterModel(Mlt::Properties *asset, const QDomElement &assetXml, const QString &assetId, ObjectId ownerId, QObject *parent = nullptr);
     virtual ~AssetParameterModel();
-    enum {
+    enum DataRoles {
         NameRole = Qt::UserRole + 1,
         TypeRole,
         CommentRole,
@@ -93,7 +93,27 @@ public:
         InRole,
         OutRole,
         ParentInRole,
-        ParentDurationRole
+        ParentPositionRole,
+        ParentDurationRole,
+        HideKeyframesFirstRole,
+        List1Role,
+        List2Role,
+        Enum1Role,
+        Enum2Role,
+        Enum3Role,
+        Enum4Role,
+        Enum5Role,
+        Enum6Role,
+        Enum7Role,
+        Enum8Role,
+        Enum9Role,
+        Enum10Role,
+        Enum11Role,
+        Enum12Role,
+        Enum13Role,
+        Enum14Role,
+        Enum15Role,
+        Enum16Role
     };
 
     /* @brief Returns the id of the asset represented by this object */
@@ -114,7 +134,7 @@ public:
     void setParameters(const QVector<QPair<QString, QVariant>> &params);
 
     /* Which monitor is attached to this asset (clip/project)
-    */
+     */
     Kdenlive::MonitorId monitorId;
 
     QVariant data(const QModelIndex &index, int role) const override;
@@ -131,6 +151,8 @@ public:
     /* @brief Must be called before using the keyframes of this model */
     void prepareKeyframes();
     void resetAsset(Mlt::Properties *asset);
+    /* @brief Returns true if the effect has more than one keyframe */
+    bool hasMoreThanOneKeyframe() const;
 
 protected:
     /* @brief Helper function to retrieve the type of a parameter given the string corresponding to it*/
@@ -158,7 +180,6 @@ protected:
         QString name;
     };
 
-    QDomElement m_xml;
     QString m_assetId;
     ObjectId m_ownerId;
     std::vector<QString> m_paramOrder;                   // Keep track of parameter order, important for sox
@@ -169,6 +190,8 @@ protected:
     std::unique_ptr<Mlt::Properties> m_asset;
 
     std::shared_ptr<KeyframeModelList> m_keyframes;
+    // if true, keyframe tools will be hidden by default
+    bool m_hideKeyframesByDefault;
 
 signals:
     void modelChanged();

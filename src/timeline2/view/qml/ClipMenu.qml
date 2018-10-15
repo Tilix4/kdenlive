@@ -1,110 +1,117 @@
 import QtQuick 2.6
-import QtQuick.Controls 1.4 as OLD
+import QtQuick.Controls 1.4
 import com.enums 1.0
 
-OLD.Menu {
+Menu {
         id: clipMenu
         property int clipId
         property int clipStatus
         property int trackId
         property bool grouped
-        function show() {
-            //mergeItem.visible = timeline.mergeClipWithNext(trackIndex, index, true)
-            menu.popup()
+        property bool canBeAudio
+        property bool canBeVideo
+
+        onAboutToHide: {
+            timeline.ungrabHack()
         }
-        OLD.MenuItem {
-            visible: true
-            text: i18n('Cut')
-            onTriggered: {
-                console.log('cutting clip:', clipId)
-                if (!parentTrack.isLocked) {
-                    timeline.requestClipCut(clipId, timeline.position)
-                } else {
-                    root.pulseLockButtonOnTrack(trackId)
-                }
-            }
+
+        MenuItem {
+            text: i18n('Copy')
+            onTriggered: root.copiedClip = clipId
         }
-        OLD.MenuItem {
+        MenuItem {
             visible: !grouped && timeline.selection.length > 1
             text: i18n('Group')
             onTriggered: timeline.triggerAction('group_clip')
         }
-        OLD.MenuItem {
+        MenuItem {
             visible: grouped
             text: i18n('Ungroup')
             onTriggered: timeline.unGroupSelection(clipId)
         }
-
-        OLD.MenuItem {
-            visible: true
-            text: i18n('Copy')
-            onTriggered: root.copiedClip = clipId
+        MenuItem {
+            text: i18n('Edit Duration')
+            onTriggered: {
+                //clipMenu.close()
+                timeline.editItemDuration(clipId)
+            }
         }
-        OLD.MenuItem {
+        MenuItem {
             visible: root.copiedClip != -1 && root.copiedClip != clipId
             text: i18n('Paste Effects')
             onTriggered: timeline.pasteEffects(clipId, root.copiedClip)
         }
-        OLD.MenuSeparator {
+        MenuSeparator {
             visible: true
         }
-        OLD.MenuItem {
+        MenuItem {
             text: i18n('Split Audio')
             onTriggered: timeline.splitAudio(clipId)
-            visible: clipStatus == ClipState.VideoOnly
+            visible: !grouped && canBeAudio && clipStatus == ClipState.VideoOnly
         }
-        OLD.MenuItem {
+        MenuItem {
+            text: i18n('Split Video')
+            onTriggered: timeline.splitVideo(clipId)
+            visible: !grouped && canBeVideo && clipStatus == ClipState.AudioOnly
+        }
+        MenuItem {
+            text: i18n('Set Audio Reference')
+            onTriggered: timeline.setAudioRef(clipId)
+            visible: canBeAudio
+        }
+        MenuItem {
+            text: i18n('Align Audio')
+            onTriggered: timeline.alignAudio(clipId)
+            visible: canBeAudio
+        }
+        MenuItem {
             text: i18n('Remove')
             onTriggered: timeline.triggerAction('delete_timeline_clip')
         }
-        OLD.MenuItem {
+        MenuItem {
             visible: true
             text: i18n('Extract')
             onTriggered: timeline.extract(clipId)
         }
-        OLD.MenuSeparator {
+        MenuSeparator {
             visible: true
         }
-        OLD.MenuItem {
+        MenuItem {
             visible: true
             text: i18n('Change Speed')
-            onTriggered: timeline.changeItemSpeed(clipId, -1)
+            onTriggered: {
+                clipMenu.close()
+                timeline.changeItemSpeed(clipId, -1)
+            }
         }
 
-        OLD.MenuItem {
+        MenuItem {
             text: i18n('Clip in Project Bin')
             onTriggered: timeline.triggerAction('clip_in_project_tree')
         }
-        OLD.MenuItem {
+        MenuItem {
             visible: true
             text: i18n('Split At Playhead')
             onTriggered: timeline.triggerAction('cut_timeline_clip')
         }
-        OLD.Menu {
-            title: i18n('Clip Tape...')
-            OLD.ExclusiveGroup {
-                id: radioInputGroup
+        MenuItem {
+            visible: true
+            text: clipStatus != ClipState.Disabled ? i18n('Disable clip') : i18n('Enable clip')
+            onTriggered: timeline.switchEnableState(clipId)
+        }
+        AssetMenu {
+            title: i18n('Insert an effect...')
+            menuModel: effectModel
+            onAssetSelected: {
+                timeline.addEffectToClip(assetId, clipId)
             }
-            OLD.MenuItem {
-                text: i18n('Video Only')
-                checkable: true
-                checked: clipStatus == ClipState.VideoOnly
-                exclusiveGroup: radioInputGroup
-                onTriggered: timeline.setClipStatus(clipId, ClipState.VideoOnly)
-            }
-            OLD.MenuItem {
-                text: i18n('Audio Only')
-                checkable: true
-                checked: clipStatus == ClipState.AudioOnly
-                exclusiveGroup: radioInputGroup
-                onTriggered: timeline.setClipStatus(clipId, ClipState.AudioOnly)
-            }
-            OLD.MenuItem {
-                text: i18n('Disabled')
-                checkable: true
-                checked: clipStatus == ClipState.Disabled
-                exclusiveGroup: radioInputGroup
-                onTriggered: timeline.setClipStatus(clipId, ClipState.Disabled)
+        }
+        AssetMenu {
+            title: i18n('Insert a composition...')
+            menuModel: transitionModel
+            isTransition: true
+            onAssetSelected: {
+                timeline.addCompositionToClip(assetId, clipId)
             }
         }
 }

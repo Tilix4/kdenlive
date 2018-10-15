@@ -39,7 +39,6 @@
 #include "mltcontroller/effectscontroller.h"
 #include "timecode.h"
 
-class ClipManager;
 class MainWindow;
 class TrackInfo;
 class ProjectClip;
@@ -76,7 +75,6 @@ public:
     Timecode timecode() const;
     QDomDocument toXml();
     std::shared_ptr<DocUndoStack> commandStack();
-    ClipManager *clipManager();
 
     int getFramePos(const QString &duration);
     /** @brief Get a bin's clip from its id. */
@@ -107,6 +105,8 @@ public:
     void setProjectFolder(const QUrl &url);
     void setZone(int start, int end);
     QPoint zone() const;
+    /** @brief Returns target tracks (video, audio). */
+    QPair<int, int> targetTracks() const;
     void setDocumentProperty(const QString &name, const QString &value);
     const QString getDocumentProperty(const QString &name, const QString &defaultValue = QString()) const;
 
@@ -157,6 +157,8 @@ public:
     const QString documentRoot() const;
     /** @brief Returns true if timeline preview settings changed*/
     bool updatePreviewSettings(const QString &profile);
+    /** @brief Returns the recommanded proxy profile parameters */
+    QString getAutoProxyProfile();
 
 private:
     QUrl m_url;
@@ -165,11 +167,16 @@ private:
     QString m_documentRoot;
     Timecode m_timecode;
     std::shared_ptr<DocUndoStack> m_commandStack;
-    ClipManager *m_clipManager;
     QString m_searchFolder;
 
     /** @brief Tells whether the current document has been changed after being saved. */
     bool m_modified;
+
+    /** @brief The default recommanded proxy extension */
+    QString m_proxyExtension;
+
+    /** @brief The default recommanded proxy params */
+    QString m_proxyParams;
 
     /** @brief Tells whether the current document was modified by Kdenlive on opening, and a backup should be created on save. */
     enum DOCSTATUS { CleanProject, ModifiedProject, UpgradedProject };
@@ -196,6 +203,8 @@ private:
     void loadDocumentProperties();
     /** @brief update document properties to reflect a change in the current profile */
     void updateProjectProfile(bool reloadProducers = false);
+    /** @brief initialize proxy settings based on hw status */
+    void initProxySettings();
 
 public slots:
     void slotCreateTextTemplateClip(const QString &group, const QString &groupId, QUrl path);

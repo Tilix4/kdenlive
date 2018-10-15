@@ -92,11 +92,11 @@ public slots:
     void slotLoadOnOpen();
 
     /** @brief Checks whether a URL is available to save to.
-    * @return Whether the file was saved. */
+     * @return Whether the file was saved. */
     bool saveFile();
 
     /** @brief Shows a save file dialog for saving the project.
-    * @return Whether the file was saved. */
+     * @return Whether the file was saved. */
     bool saveFileAs();
     /** @brief Saves current timeline selection to an MLT playlist. */
     void slotSaveSelection(const QString &path = QString());
@@ -105,15 +105,15 @@ public slots:
      * Creates an autosave version of the output file too, at
      * ~/.kde/data/stalefiles/kdenlive/ \n
      * that will be actually written in KdenliveDoc::slotAutoSave()
-    * @param outputFileName The URL to save to / The document's URL.
-    * @return Whether we had success. */
+     * @param outputFileName The URL to save to / The document's URL.
+     * @return Whether we had success. */
     bool saveFileAs(const QString &outputFileName);
     /** @brief Close currently opened document. Returns false if something went wrong (cannot save modifications, ...). */
     bool closeCurrentDocument(bool saveChanges = true, bool quit = false);
 
     /** @brief Prepares opening @param url.
-    *
-    * Checks if already open and whether backup exists */
+     *
+     * Checks if already open and whether backup exists */
     void openFile(const QUrl &url);
 
     /** @brief Start autosave timer */
@@ -121,6 +121,9 @@ public slots:
 
     /** @brief Update project and monitors profiles */
     void slotResetProfiles();
+
+    /** @brief Rebuild consumers after a property change */
+    void slotResetConsumers(bool fullReset);
 
     /** @brief Expand current timeline clip (recover clips and tracks from an MLT playlist) */
     void slotExpandClip();
@@ -141,6 +144,8 @@ public slots:
     void adjustProjectDuration();
     /** @brief Add an asset in timeline (effect, transition). */
     void activateAsset(const QVariantMap effectData);
+    /** @brief insert current timeline timecode in notes widget and focus widget to allow entering quick note */
+    void slotAddProjectNote();
 
 private slots:
     void slotRevert();
@@ -161,11 +166,11 @@ protected:
 
 private:
     /** @brief Checks that the Kdenlive MIME type is correctly installed.
-    * @param open If set to true, this will return the MIME type allowed for file opening (adds .tar.gz format)
-    * @return The MIME type */
+     * @param open If set to true, this will return the MIME type allowed for file opening (adds .tar.gz format)
+     * @return The MIME type */
     QString getMimeType(bool open = true);
     /** @brief checks if autoback files exists, recovers from it if user says yes, returns true if files were recovered. */
-    bool checkForBackupFile(const QUrl &url);
+    bool checkForBackupFile(const QUrl &url, bool newFile = false);
 
     KdenliveDoc *m_project;
     std::shared_ptr<TimelineItemModel> m_mainTimelineModel;

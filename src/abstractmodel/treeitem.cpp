@@ -190,6 +190,11 @@ QVariant TreeItem::dataColumn(int column) const
     return m_itemData.value(column);
 }
 
+void TreeItem::setData(int column, const QVariant dataColumn)
+{
+    m_itemData[column] = dataColumn;
+}
+
 std::weak_ptr<TreeItem> TreeItem::parentItem() const
 {
     return m_parentItem;
@@ -269,4 +274,18 @@ void TreeItem::updateParent(std::shared_ptr<TreeItem> parent)
     if (parent) {
         m_depth = parent->m_depth + 1;
     }
+}
+
+std::vector<std::shared_ptr<TreeItem>> TreeItem::getLeaves()
+{
+    if (childCount() == 0) {
+        return {shared_from_this()};
+    }
+    std::vector<std::shared_ptr<TreeItem>> leaves;
+    for (const auto &c : m_childItems) {
+        for (const auto &l : c->getLeaves()) {
+            leaves.push_back(l);
+        }
+    }
+    return leaves;
 }

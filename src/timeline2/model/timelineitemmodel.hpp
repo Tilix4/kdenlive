@@ -80,10 +80,23 @@ public:
     QModelIndex makeTrackIndexFromID(int trackId) const override;
     QModelIndex parent(const QModelIndex &index) const override;
     Q_INVOKABLE void setTrackProperty(int tid, const QString &name, const QString &value);
-    Q_INVOKABLE QVariant getTrackProperty(int tid, const QString &name);
+    /* @brief Enabled/disabled a track's effect stack */
+    Q_INVOKABLE void setTrackStackEnabled(int tid, bool enable);
+    Q_INVOKABLE QVariant getTrackProperty(int tid, const QString &name) const;
+    /** @brief returns the lower video track index in timeline.
+     **/
+    int getFirstVideoTrackIndex() const;
+    const QString getTrackFullName(int tid) const;
     void notifyChange(const QModelIndex &topleft, const QModelIndex &bottomright, bool start, bool duration, bool updateThumb) override;
     void notifyChange(const QModelIndex &topleft, const QModelIndex &bottomright, const QVector<int> &roles) override;
-    void buildTrackCompositing();
+    void notifyChange(const QModelIndex &topleft, const QModelIndex &bottomright, int role) override;
+
+    /** @brief Rebuild track compositing */
+    void buildTrackCompositing(bool rebuild = false);
+
+    /** @brief Import track effects */
+    void importTrackEffects(int tid, std::weak_ptr<Mlt::Service> service);
+
     const QString groupsData();
     bool loadGroups(const QString &groupsData);
     /* @brief returns true if clip is in temporary selection group.

@@ -39,6 +39,7 @@ QHash<int, QByteArray> AssetTreeModel::roleNames() const
     QHash<int, QByteArray> roles;
     roles[IdRole] = "identifier";
     roles[NameRole] = "name";
+    roles[FavoriteRole] = "favorite";
     return roles;
 }
 
@@ -52,6 +53,36 @@ QString AssetTreeModel::getName(const QModelIndex &index) const
         return item->dataColumn(0).toString();
     }
     return item->dataColumn(AssetTreeModel::nameCol).toString();
+}
+
+bool AssetTreeModel::isFavorite(const QModelIndex &index) const
+{
+    if (!index.isValid()) {
+        return false;
+    }
+    std::shared_ptr<TreeItem> item = getItemById((int)index.internalId());
+    if (item->depth() == 1) {
+        return false;
+    }
+    return item->dataColumn(AssetTreeModel::favCol).toBool();
+}
+
+void AssetTreeModel::setFavorite(const QModelIndex &index, bool favorite)
+{
+    if (!index.isValid()) {
+        return;
+    }
+    std::shared_ptr<TreeItem> item = getItemById((int)index.internalId());
+    if (item->depth() == 1) {
+        return;
+    }
+    item->setData(AssetTreeModel::favCol, favorite);
+    auto id = item->dataColumn(AssetTreeModel::idCol).toString();
+    if (EffectsRepository::get()->exists(id)) {
+        EffectsRepository::get()->setFavorite(id, favorite);
+    } else if (TransitionsRepository::get()->exists(id)) {
+        TransitionsRepository::get()->setFavorite(id, favorite);
+    }
 }
 
 QString AssetTreeModel::getDescription(const QModelIndex &index) const
@@ -80,12 +111,14 @@ QVariant AssetTreeModel::data(const QModelIndex &index, int role) const
     }
 
     std::shared_ptr<TreeItem> item = getItemById((int)index.internalId());
-    if (role == IdRole) {
-        return item->dataColumn(AssetTreeModel::idCol);
+    switch(role) {
+        case IdRole:
+            return item->dataColumn(AssetTreeModel::idCol);
+        case FavoriteRole:
+            return item->dataColumn(AssetTreeModel::favCol);
+        case NameRole:
+            return item->dataColumn(index.column());
+        default:
+            return QVariant();
     }
-
-    if (role != NameRole) {
-        return QVariant();
-    }
-    return item->dataColumn(index.column());
 }

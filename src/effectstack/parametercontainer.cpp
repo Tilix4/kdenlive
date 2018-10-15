@@ -44,7 +44,7 @@
 #include "mainwindow.h"
 #include "mltcontroller/effectscontroller.h"
 #include "onmonitoritems/rotoscoping/rotowidget.h"
-#include "utils/KoIconUtils.h"
+
 
 #include "ui_fontval_ui.h"
 #include "ui_keywordval_ui.h"
@@ -334,7 +334,7 @@ ParameterContainer::ParameterContainer(const QDomElement &effect, const ItemInfo
                     useOffset = true;
                 }
                 m_geometryWidget = new GeometryWidget(m_metaInfo, info.startPos.frames(KdenliveSettings::project_fps()),
-                                                      effect.hasAttribute(QStringLiteral("showrotation")), useOffset, false, parent);
+                                                      effect.hasAttribute(QStringLiteral("showrotation")), useOffset, false, false, parent);
                 if (m_conditionParameter && pa.hasAttribute(QStringLiteral("conditional"))) {
                     m_geometryWidget->setEnabled(false);
                     m_conditionalWidgets << m_geometryWidget;
@@ -606,8 +606,8 @@ ParameterContainer::ParameterContainer(const QDomElement &effect, const ItemInfo
                 button->setProperty("realName", paramName);
                 if (effect.hasAttribute(QStringLiteral("condition"))) {
                     if (m_conditionParameter) {
-                        QDomElement na = pa.firstChildElement(QStringLiteral("name"));
-                        QString conditionalName = na.attribute(QStringLiteral("conditional"));
+                        QDomElement nnode = pa.firstChildElement(QStringLiteral("name"));
+                        QString conditionalName = nnode.attribute(QStringLiteral("conditional"));
                         if (!conditionalName.isEmpty()) {
                             paramName = conditionalName;
                         }

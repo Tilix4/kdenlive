@@ -20,25 +20,26 @@
 #include "doublewidget.h"
 #include "dragvalue.h"
 
-#include <QGridLayout>
+#include <QVBoxLayout>
 
-DoubleWidget::DoubleWidget(const QString &name, double value, double min, double max, double defaultValue, const QString &comment, int id,
+DoubleWidget::DoubleWidget(const QString &name, double value, double min, double max, double factor, double defaultValue, const QString &comment, int id,
                            const QString &suffix, int decimals, QWidget *parent)
     : QWidget(parent)
-    , factor(1)
+    , m_factor(factor)
 {
-    setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::Maximum);
-    auto *layout = new QGridLayout(this);
+    setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::Preferred);
+    auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
 
     m_dragVal = new DragValue(name, defaultValue, decimals, min, max, id, suffix, true, this);
-    layout->addWidget(m_dragVal, 0, 1);
+    layout->addWidget(m_dragVal);
+    setMinimumHeight(m_dragVal->height());
 
     if (!comment.isEmpty()) {
         setToolTip(comment);
     }
-    m_dragVal->setValue(value, false);
+    m_dragVal->setValue(value * factor, false);
     connect(m_dragVal, &DragValue::valueChanged, this, &DoubleWidget::slotSetValue);
 }
 
@@ -65,7 +66,7 @@ void DoubleWidget::setSpinSize(int width)
 void DoubleWidget::setValue(double value)
 {
     m_dragVal->blockSignals(true);
-    m_dragVal->setValue(value * factor);
+    m_dragVal->setValue(value * m_factor);
     m_dragVal->blockSignals(false);
 }
 
@@ -77,7 +78,7 @@ void DoubleWidget::enableEdit(bool enable)
 void DoubleWidget::slotSetValue(double value, bool final)
 {
     if (final) {
-        emit valueChanged(value / factor);
+        emit valueChanged(value / m_factor);
     }
 }
 

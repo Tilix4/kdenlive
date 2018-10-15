@@ -31,6 +31,8 @@
 class EffectFilter;
 class EffectTreeModel;
 class EffectListWidgetProxy;
+class KActionCategory;
+class QMenu;
 
 class EffectListWidget : public AssetListWidget
 {
@@ -43,9 +45,17 @@ public:
 
     /*@brief Return mime type used for drag and drop. It will be kdenlive/effect*/
     QString getMimeType(const QString &assetId) const override;
+    void updateFavorite(const QModelIndex &index);
+    void reloadEffectMenu(QMenu *effectsMenu, KActionCategory *effectActions);
+
+public slots:
+    void reloadCustomEffect(const QString &path);
 
 private:
     EffectListWidgetProxy *m_proxy;
+
+signals:
+    void reloadFavorites();
 };
 
 // see https://bugreports.qt.io/browse/QTBUG-57714, don't expose a QWidget as a context property
@@ -61,7 +71,8 @@ public:
     {
     }
     Q_INVOKABLE QString getName(const QModelIndex &index) const { return q->getName(index); }
-
+    Q_INVOKABLE bool isFavorite(const QModelIndex &index) const { return q->isFavorite(index); }
+    Q_INVOKABLE void setFavorite(const QModelIndex &index, bool favorite) const { q->setFavorite(index, favorite);q->updateFavorite(index);}
     Q_INVOKABLE QString getDescription(const QModelIndex &index) const { return q->getDescription(index); }
     Q_INVOKABLE QVariantMap getMimeData(const QString &assetId) const { return q->getMimeData(assetId); }
 

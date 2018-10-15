@@ -160,7 +160,15 @@ public:
     */
     const QString toJson() const;
     bool fromJson(const QString &data);
+
+    /* @brief if the clip belongs to a AVSplit group, then return the id of the other corresponding clip. Otherwise, returns -1 */
     int getSplitPartner(int id) const;
+
+    /* @brief Check the internal consistency of the model. Returns false if something is wrong
+       @param failOnSingleGroups: if true, we make sure that a non-leaf node has at least two children
+       @param checkTimelineConsistency: if true, we make sure that the group data of the parent timeline are consistent
+    */
+    bool checkConsistency(bool failOnSingleGroups = true, bool checkTimelineConsistency = false);
 
 protected:
     /* @brief Destruct a groupItem in the hierarchy.
@@ -178,8 +186,9 @@ protected:
     /* @brief change the group of a given item
        @param id of the groupItem
        @param groupId id of the group to assign it to
+       @param changeState when false, the grouped role for item won't be updated (for selection)
     */
-    void setGroup(int id, int groupId);
+    void setGroup(int id, int groupId, bool changeState = true);
 
     /* @brief Remove an item from all the groups it belongs to.
        @param id of the groupItem

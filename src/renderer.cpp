@@ -277,7 +277,6 @@ double Render::sar() const
     return m_qmlView->profile()->sar();
 }
 
-
 void Render::loadUrl(const QString &url)
 {
     Mlt::Producer *producer = new Mlt::Producer(*m_qmlView->profile(), url.toUtf8().constData());
@@ -594,7 +593,7 @@ void Render::switchPlay(bool play, double speed)
     }
     if (play) {
         double currentSpeed = m_mltProducer->get_speed();
-        if (m_name == Kdenlive::ClipMonitor && m_mltConsumer->position() == m_mltProducer->get_out()) {
+        if (m_name == Kdenlive::ClipMonitor && m_mltConsumer->position() == m_mltProducer->get_out() && speed > 0) {
             m_mltProducer->seek(0);
         }
         if (m_mltConsumer->get_int("real_time") != m_qmlView->realTime()) {
@@ -611,6 +610,7 @@ void Render::switchPlay(bool play, double speed)
             m_isRefreshing = true;
             m_mltConsumer->set("refresh", 1);
         } else {
+            m_mltProducer->seek(m_mltConsumer->position() + 1);
             m_mltConsumer->purge();
         }
         m_mltProducer->set_speed(speed);
@@ -855,14 +855,20 @@ bool Render::checkFrameNumber(int pos)
     if (pos == requestedSeekPosition) {
         requestedSeekPosition = SEEK_INACTIVE;
     }
+    const double speed = m_mltProducer->get_speed();
     if (requestedSeekPosition != SEEK_INACTIVE) {
-        double speed = m_mltProducer->get_speed();
         m_mltProducer->set_speed(0);
         m_mltProducer->seek(requestedSeekPosition);
         if (qFuzzyIsNull(speed)) {
             m_mltConsumer->set("refresh", 1);
         } else {
             m_mltProducer->set_speed(speed);
+        }
+    } else if (speed < 0){
+        m_isRefreshing = false;
+        if (pos <= 0) {
+            m_mltProducer->set_speed(0);
+            return false;
         }
     } else {
         m_isRefreshing = false;
@@ -912,7 +918,7 @@ void Render::showAudio(Mlt::Frame &frame)
     // Data format: [ c00 c10 c01 c11 c02 c12 c03 c13 ... c0{samples-1} c1{samples-1} for 2 channels.
     // So the vector is of size samples*channels.
     audioShortVector sampleVector(samples * num_channels);
-    memcpy(sampleVector.data(), data, (unsigned) (samples * num_channels) * sizeof(qint16));
+    memcpy(sampleVector.data(), data, (unsigned)(samples * num_channels) * sizeof(qint16));
 
     if (samples > 0) {
         emit audioSamplesSignal(sampleVector, freq, num_channels, samples);
@@ -1501,7 +1507,6 @@ double Render::getMltVersionInfo(const QString &tag)
     delete metadata;
     return version;
 }
-
 
 void Render::loadExtraProducer(const QString &id, Mlt::Producer *prod)
 {

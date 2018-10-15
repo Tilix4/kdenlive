@@ -37,12 +37,25 @@ void EffectFilter::setFilterType(bool enabled, EffectType type)
     invalidateFilter();
 }
 
+void EffectFilter::reloadFilterOnFavorite()
+{
+    if (m_type_enabled && m_type_value == EffectType::Favorites) {
+        invalidateFilter();
+    }
+}
+
 bool EffectFilter::filterType(const std::shared_ptr<TreeItem> &item) const
 {
+    auto itemType = item->dataColumn(AssetTreeModel::typeCol).value<EffectType>();
+    if (itemType == EffectType::Hidden) {
+        return false;
+    }
     if (!m_type_enabled) {
         return true;
     }
-    auto itemType = item->dataColumn(AssetTreeModel::typeCol).value<EffectType>();
+    if (m_type_value == EffectType::Favorites) {
+        return item->dataColumn(AssetTreeModel::favCol).toBool();
+    }
     return itemType == m_type_value;
 }
 

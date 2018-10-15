@@ -21,6 +21,8 @@ the Free Software Foundation, either version 3 of the License, or
 #include "kdenlive_debug.h"
 #include <QFile>
 #include <QStandardPaths>
+#include <mlt++/MltFactory.h>
+#include <mlt++/MltRepository.h>
 
 std::unique_ptr<MltConnection> MltConnection::m_self;
 MltConnection::MltConnection(const QString &mltPath)
@@ -78,9 +80,9 @@ void MltConnection::locateMeltAndProfilesPath(const QString &mltPath)
     KdenliveSettings::setMltpath(profilePath);
 
 #ifdef Q_OS_WIN
-    QString meltPath = QDir::cleanPath(profilePath).section(QLatin1Char('/'), 0, -3) + QStringLiteral("/melt.exe");
+    QString meltPath = QDir::cleanPath(profilePath + QStringLiteral("../../../melt.exe"));
 #else
-    QString meltPath = QDir::cleanPath(profilePath).section(QLatin1Char('/'), 0, -3) + QStringLiteral("/bin/melt");
+    QString meltPath = QDir::cleanPath(profilePath + QStringLiteral("../../../bin/melt"));
     if (!QFile::exists(meltPath)) meltPath = qgetenv("MLT_PREFIX") + QStringLiteral("/bin/melt");
     if (!QFile::exists(meltPath)) meltPath = KdenliveSettings::rendererpath();
     if (!QFile::exists(meltPath)) meltPath = QStandardPaths::findExecutable("melt");
@@ -104,7 +106,11 @@ void MltConnection::locateMeltAndProfilesPath(const QString &mltPath)
         }
     }
     if (profilePath.isEmpty()) {
-        profilePath = QDir::cleanPath(meltPath).section(QLatin1Char('/'), 0, -3) + QStringLiteral("/share/mlt/profiles/");
+#ifdef Q_OS_WIN
+        profilePath = QDir::cleanPath(meltPath + QStringLiteral("/../share/mlt/profiles/"));
+#else
+        profilePath = QDir::cleanPath(meltPath + QStringLiteral("/../../share/mlt/profiles/"));
+#endif
         KdenliveSettings::setMltpath(profilePath);
     }
     QStringList profilesFilter;

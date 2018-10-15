@@ -53,25 +53,29 @@ Rectangle
             }
             event.accepted = true
         }
-        if (event.key == Qt.Key_Right) {
+        else if (event.key == Qt.Key_Right) {
             if (event.modifiers & Qt.AltModifier) {
                 activeFrame = keyframes.itemAt(Math.min(keyframes.count - 1, ++activeIndex)).frame
             } else {
                 var oldFrame = activeFrame
                 activeFrame += 1
-                keyframeModel.moveKeyframe(oldFrame, activeFrame, true)
+                keyframeModel.moveKeyframe(oldFrame + inPoint, activeFrame, true)
             }
             event.accepted = true
         }
-        if (event.key == Qt.Key_Return || event.key == Qt.Key_Escape) {
-            focus = false
+        else if (event.key == Qt.Key_Return || event.key == Qt.Key_Escape) {
+            keyframeContainer.focus = false
             event.accepted = true
         }
-        if (event.key == Qt.Key_Tab) {
-            activeFrame = keyframes.itemAt(++activeIndex).frame
-            console.log('------------------------- TAB: ', activeFrame)
+        if (event.key == Qt.Key_Plus) {
+            var newVal = Math.min(keyframes.itemAt(activeIndex).value / parent.height + .05, 1)
+            keyframeModel.updateKeyframe(activeFrame, newVal)
             event.accepted = true
-            focus = true
+        }
+        else if (event.key == Qt.Key_Minus) {
+            var newVal = Math.max(keyframes.itemAt(activeIndex).value / parent.height - .05, 0)
+            keyframeModel.updateKeyframe(activeFrame, newVal)
+            event.accepted = true
         }
     }
     Repeater {
@@ -108,7 +112,7 @@ Rectangle
                 drag.axis: Drag.XAxis
                 onReleased: {
                     root.stopScrolling = false
-                    var newPos = Math.round(parent.x / timeScale)
+                    var newPos = Math.round(parent.x / timeScale) + inPoint
                     if (newPos != frame) {
                         if (mouse.modifiers & Qt.ShiftModifier) {
                             // offset all subsequent keyframes
@@ -149,11 +153,11 @@ Rectangle
                     }
                     onReleased: {
                         root.stopScrolling = false
-                        var newPos = Math.round((keyframe.x + parent.x + root.baseUnit / 2) / timeScale)
+                        var newPos = Math.round((keyframe.x + parent.x + root.baseUnit / 2) / timeScale) + inPoint
                         var newVal = (keyframeContainer.height - (parent.y + mouse.y)) / keyframeContainer.height
                         if (newVal > 1.5 || newVal < -0.5) {
                             keyframeModel.removeKeyframe(frame);
-                        } else {
+                        } else if (frame != newPos) {
                             newVal = newVal < 0 ? 0 : newVal > 1 ? 1 : newVal
                             keyframeModel.moveKeyframe(frame, newPos, newVal)
                         }

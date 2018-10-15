@@ -27,7 +27,8 @@
 #include "projectclip.h"
 #include <mlt++/Mlt.h>
 
-QString BinPlaylist::binPlaylistId = QStringLiteral("main bin");
+QString BinPlaylist::binPlaylistId = QString("main_bin");
+
 BinPlaylist::BinPlaylist()
     : m_binPlaylist(new Mlt::Playlist(pCore->getCurrentProfile()->profile()))
 {
@@ -36,7 +37,7 @@ BinPlaylist::BinPlaylist()
 
 void BinPlaylist::manageBinItemInsertion(const std::shared_ptr<AbstractProjectItem> &binElem)
 {
-    qDebug() << "MANAGE BIN ITEM INSERT"<<binElem->clipId();
+    qDebug() << "MANAGE BIN ITEM INSERT" << binElem->clipId();
     QString id = binElem->clipId();
     switch (binElem->itemType()) {
     case AbstractProjectItem::FolderItem: {
@@ -50,12 +51,12 @@ void BinPlaylist::manageBinItemInsertion(const std::shared_ptr<AbstractProjectIt
     case AbstractProjectItem::ClipItem: {
         Q_ASSERT(m_allClips.count(id) == 0);
         auto clip = std::static_pointer_cast<ProjectClip>(binElem);
-        qDebug() << "Inserting clip"<<binElem->clipId();
+        qDebug() << "Inserting clip" << binElem->clipId();
         if (clip->isValid()) {
-            qDebug() << "Inserting valid clip"<<binElem->clipId();
+            qDebug() << "Inserting valid clip" << binElem->clipId();
             m_binPlaylist->append(*clip->originalProducer().get());
         } else {
-            qDebug() << "Inserting invalid clip"<<binElem->clipId();
+            qDebug() << "Inserting invalid clip" << binElem->clipId();
             // if clip is not loaded yet, we insert a dummy producer
             Mlt::Producer dummy(pCore->getCurrentProfile()->profile(), "color:blue");
             dummy.set("kdenlive:id", id.toUtf8().constData());

@@ -66,29 +66,31 @@ bool ThumbJob::startJob()
     if (m_subClip) {
         auto item = pCore->projectItemModel()->getItemByBinId(m_clipId);
         m_binClip = std::static_pointer_cast<ProjectClip>(item->parent());
+        m_frameNumber = item->zone().x();
     } else {
         m_binClip = pCore->projectItemModel()->getClipByBinID(m_clipId);
+        if (m_frameNumber < 0) {
+            m_frameNumber = qMax(0, m_binClip->getProducerIntProperty(QStringLiteral("kdenlive:thumbnailFrame")));
+        }
     }
     if (m_binClip->clipType() == ClipType::Audio) {
         // Don't create thumbnail for audio clips
         m_done = false;
         return true;
     }
-    m_prod = m_binClip->thumbProducer();
-    if ((m_prod == nullptr) || !m_prod->is_valid()) {
-        return false;
-    }
     m_inCache = false;
-    int max = m_prod->get_length();
-    m_frameNumber = m_binClip->clipType() == ClipType::Image ? 0 : qBound(0, m_frameNumber, max - 1);
-
-    // m_frameNumber = ProjectClip::getXmlProperty(info.xml, QStringLiteral("kdenlive:thumbnailFrame"), QStringLiteral("-1")).toInt();
     if (ThumbnailCache::get()->hasThumbnail(m_binClip->clipId(), m_frameNumber, !m_persistent)) {
         m_done = true;
         m_result = ThumbnailCache::get()->getThumbnail(m_binClip->clipId(), m_frameNumber);
         m_inCache = true;
         return true;
     }
+    m_prod = m_binClip->thumbProducer();
+    if ((m_prod == nullptr) || !m_prod->is_valid()) {
+        return false;
+    }
+    int max = m_prod->get_length();
+    m_frameNumber = m_binClip->clipType() == ClipType::Image ? 0 : qMin(m_frameNumber, max - 1);
 
     if (m_frameNumber > 0) {
         m_prod->seek(m_frameNumber);
@@ -117,7 +119,7 @@ bool ThumbJob::commitResult(Fun &undo, Fun &redo)
     }
     if (!m_inCache) {
         if (m_result.isNull()) {
-            qDebug()<<"+++++\nINVALID RESULT IMAGE\n++++++++++++++";
+            qDebug() << "+++++\nINVALID RESULT IMAGE\n++++++++++++++";
         } else {
             ThumbnailCache::get()->storeThumbnail(m_binClip->clipId(), m_frameNumber, m_result, m_persistent);
         }
@@ -132,15 +134,15 @@ bool ThumbJob::commitResult(Fun &undo, Fun &redo)
 
         // note that the image is moved into lambda, it won't be available from this class anymore
         auto operation = [ clip = subClip, image = std::move(m_result) ]()
-            {
-                clip->setThumbnail(image);
-                return true;
-            };
+        {
+            clip->setThumbnail(image);
+            return true;
+        };
         auto reverse = [ clip = subClip, image = std::move(old) ]()
-            {
-                clip->setThumbnail(image);
-                return true;
-            };
+        {
+            clip->setThumbnail(image);
+            return true;
+        };
         ok = operation();
         if (ok) {
             UPDATE_UNDO_REDO_NOLOCK(operation, reverse, undo, redo);

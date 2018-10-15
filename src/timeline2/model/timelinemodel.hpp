@@ -60,6 +60,20 @@ class TrackModel;
    out, and then asks the track if there is enough room for extension. To avoid any confusion on which function to call first, rembember to always call the
    version in timeline. This is also required to generate the Undo/Redo operators
 
+   The undo/redo system is designed around lambda functions. Each time a function executes an elementary change to the model, it writes the corresponding
+   operation and its reverse, respectively in the redo and the undo lambdas. This way, if an operation fails for some reason, we can easily cancel the steps
+   that have been done so far without corrupting anything. The other advantage is that operations are easy to compose, and you get a undo/redo pair for free no
+   matter in which way you combine them.
+
+   Most of the modification functions are named requestObjectAction. Eg, if the object is a clip and we want to move it, we call requestClipMove. These
+   functions always return a bool indicating success, and when they return false they should guarantee than nothing has been modified. Most of the time, these
+   functions come in two versions: the first one is the entry point if you want to perform only the action (and not compose it with other actions). This version
+   will generally automatically push and Undo object on the Application stack, in case the user later wants to cancel the operation. It also generally goes the
+   extra mile to ensure the operation is done in a way that match the user's expectation: for example requestClipMove checks whether the clip belongs to a group
+   and in that case actually mouves the full group. The other version of the function, if it exists, is intended for composition (using the action as part of a
+   complex operation). It takes as input the undo/redo lambda corresponding to the action that is being performed and accumulates on them. Note that this
+   version does the minimal job: in the example of the requestClipMove, it will not move the full group if the clip is in a group.
+
    Generally speaking, we don't check ahead of time if an action is going to succeed or not before applying it.
    We just apply it naively, and if it fails at some point, we use the undo operator that we are constructing on the fly to revert what we have done so far.
    For example, when we move a group of clips, we apply the move operation to all the clips inside this group (in the right order). If none fails, we are good,
@@ -109,18 +123,20 @@ public:
         IsBlankRole,  /// clip only
         StartRole,    /// clip only
         BinIdRole,    /// clip only
+        TrackIdRole,
         MarkersRole,  /// clip only
         StatusRole,   /// clip only
-        GroupDragRole, /// indicates if the clip is in current timeline selection, needed for group drag
+        TypeRole,     /// clip only
         KeyframesRole,
         DurationRole,
-        InPointRole,   /// clip only
-        OutPointRole,  /// clip only
-        FramerateRole, /// clip only
-        GroupedRole,   /// clip only
-        HasAudio,      /// clip only
-        IsMuteRole,    /// track only
-        IsHiddenRole,  /// track only
+        InPointRole,    /// clip only
+        OutPointRole,   /// clip only
+        FramerateRole,  /// clip only
+        GroupedRole,    /// clip only
+        HasAudio,       /// clip only
+        CanBeAudioRole, /// clip only
+        CanBeVideoRole, /// clip only
+        IsDisabledRole, /// track only
         IsAudioRole,
         SortRole,
         ShowKeyframesRole,
@@ -128,15 +144,19 @@ public:
         IsCompositeRole,   /// track only
         IsLockedRole,      /// track only
         HeightRole,        /// track only
-        TrackTagRole,          /// track only
+        TrackTagRole,      /// track only
         FadeInRole,        /// clip only
         FadeOutRole,       /// clip only
         IsCompositionRole, /// clip only
         FileHashRole,      /// clip only
         SpeedRole,         /// clip only
-        ReloadThumbRole,       /// clip only
+        ReloadThumbRole,   /// clip only
         ItemATrack,        /// composition only
-        ItemIdRole
+        ItemIdRole,
+        ThumbsFormatRole,  /// track only
+        EffectNamesRole,   // track and clip only
+        EffectsEnabledRole,// track and clip only
+        GrabbedRole        /// clip+composition only
     };
 
     virtual ~TimelineModel();
@@ -171,7 +191,27 @@ public:
     Q_INVOKABLE int getCompositionTrackId(int compoId) const;
 
     /* @brief Convenience function that calls either of the previous ones based on item type*/
-    int getItemTrackId(int itemId) const;
+    Q_INVOKABLE int getItemTrackId(int itemId) const;
+
+    Q_INVOKABLE int getCompositionPosition(int compoId) const;
+    int getCompositionPlaytime(int compoId) const;
+
+    /* Returns an item position, item can be clip or composition */
+    Q_INVOKABLE int getItemPosition(int itemId) const;
+    /* Returns an item duration, item can be clip or composition */
+    int getItemPlaytime(int itemId) const;
+
+    /* Returns the current speed of a clip */
+    double getClipSpeed(int clipId) const;
+
+    /* @brief Helper function to query the amount of free space around a clip
+     * @param clipId: the queried clip. If it is not inserted on a track, this functions returns 0
+     * @param after: if true, we return the blank after the clip, otherwise, before.
+     */
+    int getBlankSizeNearClip(int clipId, bool after) const;
+
+    /* @brief if the clip belongs to a AVSplit group, then return the id of the other corresponding clip. Otherwise, returns -1 */
+    int getClipSplitPartner(int clipId) const;
 
     /* @brief Helper function that returns true if the given ID corresponds to a clip */
     bool isClip(int id) const;
@@ -196,7 +236,6 @@ public:
     Q_INVOKABLE int getClipPosition(int clipId) const;
     Q_INVOKABLE bool addClipEffect(int clipId, const QString &effectId);
     Q_INVOKABLE bool addTrackEffect(int trackId, const QString &effectId);
-    double getClipSpeed(int clipId) const;
     bool removeFade(int clipId, bool fromStart);
     Q_INVOKABLE bool copyClipEffect(int clipId, const QString &sourceId);
     bool adjustEffectLength(int clipId, const QString &effectId, int duration, int initialDuration);
@@ -204,6 +243,11 @@ public:
     /* @brief Returns the closest snap point within snapDistance
      */
     Q_INVOKABLE int suggestSnapPoint(int pos, int snapDistance);
+
+    /** @brief Return the previous track of same type as source trackId, or trackId if no track found */
+    Q_INVOKABLE int getPreviousTrackId(int trackId);
+    /** @brief Return the next track of same type as source trackId, or trackId if no track found */
+    Q_INVOKABLE int getNextTrackId(int trackId);
 
     /* @brief Returns the in cut position of a clip
        @param clipId Id of the clip to test
@@ -220,7 +264,7 @@ public:
     */
     int getClipPlaytime(int clipId) const;
 
-    /* @brief Returns the duration of a clip
+    /* @brief Returns the size of the clip's frame (widthxheight)
        @param clipId Id of the clip to test
     */
     QSize getClipFrameSize(int clipId) const;
@@ -242,17 +286,30 @@ public:
     /* @brief Returns the track's index in terms of mlt's internal representation
      */
     int getTrackMltIndex(int trackId) const;
+    /* @brief Returns a sort position for tracks.
+     * @param separated: if true, the tracks will be sorted like: V2,V1,A1,A2
+     * Otherwise, the tracks will be sorted like V2,A2,V1,A1
+     */
+    int getTrackSortValue(int trackId, bool separated) const;
 
     /* @brief Returns the ids of the tracks below the given track in the order of the tracks
        Returns an empty list if no track available
        @param trackId Id of the track to test
     */
-    QList <int> getLowerTracksId(int trackId, TrackType type = TrackType::AnyTrack) const;
+    QList<int> getLowerTracksId(int trackId, TrackType type = TrackType::AnyTrack) const;
 
-    /* @brief Returns the MLT track index of the video track just below the given trackC
+    /* @brief Returns the MLT track index of the video track just below the given track
        @param trackId Id of the track to test
     */
     int getPreviousVideoTrackPos(int trackId) const;
+    /* @brief Returns the Track id of the video track just below the given track
+       @param trackId Id of the track to test
+    */
+    int getPreviousVideoTrackIndex(int trackId) const;
+
+    /* @brief Retuns the Id of the corresponding audio track. If trackId corresponds to video1, this will return audio 1 and so on */
+    int getMirrorAudioTrackId(int trackId) const;
+    int getMirrorVideoTrackId(int trackId) const;
 
     /* @brief Move a clip to a specific position
        This action is undoable
@@ -280,14 +337,6 @@ public:
     bool requestClipMove(int clipId, int trackId, int position, bool updateView, bool invalidateTimeline, Fun &undo, Fun &redo);
     bool requestCompositionMove(int transid, int trackId, int compositionTrack, int position, bool updateView, Fun &undo, Fun &redo);
 
-    Q_INVOKABLE int getCompositionPosition(int compoId) const;
-    int getCompositionPlaytime(int compoId) const;
-
-    /* Returns an item position, item can be clip or composition */
-    int getItemPosition(int itemId) const;
-    /* Returns an item duration, item can be clip or composition */
-    int getItemPlaytime(int itemId) const;
-
     /* @brief Given an intended move, try to suggest a more valid one
        (accounting for snaps and missing UI calls)
        @param clipId id of the clip to
@@ -295,8 +344,11 @@ public:
        @param trackId id of the target track
        @param position target position
        @param snapDistance the maximum distance for a snap result, -1 for no snapping
-        of the clip */
-    Q_INVOKABLE int suggestClipMove(int clipId, int trackId, int position, int snapDistance = -1);
+        of the clip
+       @param dontRefreshMasterClip when false, no view refresh is attempted
+        */
+    Q_INVOKABLE int suggestItemMove(int itemId, int trackId, int position, int snapDistance = -1);
+    Q_INVOKABLE int suggestClipMove(int clipId, int trackId, int position, int snapDistance = -1, bool allowViewUpdate = true);
     Q_INVOKABLE int suggestCompositionMove(int compoId, int trackId, int position, int snapDistance = -1);
 
     /* @brief Request clip insertion at given position. This action is undoable
@@ -307,10 +359,13 @@ public:
        @param ID return parameter of the id of the inserted clip
        @param logUndo if set to false, no undo object is stored
        @param refreshView whether the view should be refreshed
+       @param useTargets: if true, the Audio/video split will occur on the set targets. Otherwise, they will be computed as an offset from the middle line
     */
-    bool requestClipInsertion(const QString &binClipId, int trackId, int position, int &id, bool logUndo = true, bool refreshView = false);
+    bool requestClipInsertion(const QString &binClipId, int trackId, int position, int &id, bool logUndo = true, bool refreshView = false,
+                              bool useTargets = true);
     /* Same function, but accumulates undo and redo*/
-    bool requestClipInsertion(const QString &binClipId, int trackId, int position, int &id, bool logUndo, bool refreshView, Fun &undo, Fun &redo);
+    bool requestClipInsertion(const QString &binClipId, int trackId, int position, int &id, bool logUndo, bool refreshView, bool useTargets, Fun &undo,
+                              Fun &redo);
     /* @brief Creates a new clip instance without inserting it.
        This action is undoable, returns true on success
        @param binClipId: Bin id of the clip to insert
@@ -338,9 +393,11 @@ public:
        @param delta_pos is the requested position change
        @param updateView if set to false, no signal is sent to qml for the clip clipId
        @param logUndo if set to true, an undo object is created
+       @param allowViewRefresh if false, the view will never get updated (useful for suggestMove)
     */
     bool requestGroupMove(int clipId, int groupId, int delta_track, int delta_pos, bool updateView = true, bool logUndo = true);
-    bool requestGroupMove(int clipId, int groupId, int delta_track, int delta_pos, bool updateView, bool finalMove, Fun &undo, Fun &redo);
+    bool requestGroupMove(int clipId, int groupId, int delta_track, int delta_pos, bool updateView, bool finalMove, Fun &undo, Fun &redo,
+                          bool allowViewRefresh = true);
 
     /* @brief Deletes all clips inside the group that contains the given clip.
        This action is undoable
@@ -362,14 +419,6 @@ public:
        @param snap if set to true, the resize order will be coerced to use the snapping grid
     */
     Q_INVOKABLE int requestItemResize(int itemId, int size, bool right, bool logUndo = true, int snapDistance = -1, bool allowSingleResize = false);
-    /* @brief Change the duration of an item (clip or composition)
-       This action is undoable
-       Returns true on success. If it fails, nothing is modified.
-       @param itemId is the ID of the item
-       @param position is the requested start or end position
-       @param resizeStart is true if we want to resize clip start, false to resize clip end
-    */
-    bool requestItemResizeToPos(int itemId, int position, bool right);
 
     /* Same function, but accumulates undo and redo and doesn't deal with snapping*/
     bool requestItemResize(int itemId, int size, bool right, bool logUndo, Fun &undo, Fun &redo, bool blockUndo = false);
@@ -472,9 +521,11 @@ public:
        @param id return parameter of the id of the inserted composition
        @param logUndo if set to false, no undo object is stored
     */
-    bool requestCompositionInsertion(const QString &transitionId, int trackId, int position, int length, Mlt::Properties *transProps, int &id, bool logUndo = true);
+    bool requestCompositionInsertion(const QString &transitionId, int trackId, int position, int length, Mlt::Properties *transProps, int &id,
+                                     bool logUndo = true);
     /* Same function, but accumulates undo and redo*/
-    bool requestCompositionInsertion(const QString &transitionId, int trackId, int compositionTrack, int position, int length, Mlt::Properties *transProps, int &id, Fun &undo, Fun &redo);
+    bool requestCompositionInsertion(const QString &transitionId, int trackId, int compositionTrack, int position, int length, Mlt::Properties *transProps,
+                                     int &id, Fun &undo, Fun &redo);
 
     /* @brief This function change the global (timeline-wise) enabled state of the effects
        It disables/enables track and clip effects (recursively)
@@ -489,13 +540,13 @@ public:
      */
     int getCompositionByPosition(int trackId, int position) const;
 
-    /* @brief Returns a list of all items that are at or after a given position.
+    /* @brief Returns a list of all items that are intersect with a given range.
      * @param trackId is the id of the track for concerned items. Setting trackId to -1 returns items on all tracks
-     * @param position is the position where we the items should start
+     * @param start is the position where we the items should start
      * @param end is the position after which items will not be selected, set to -1 to get all clips on track
      * @param listCompositions if enabled, the list will also contains composition ids
      */
-    std::unordered_set<int> getItemsAfterPosition(int trackId, int position, int end = -1, bool listCompositions = true);
+    std::unordered_set<int> getItemsInRange(int trackId, int start, int end = -1, bool listCompositions = true);
 
     /* @brief Returns a list of all luma files used in the project
      */
@@ -511,10 +562,21 @@ public:
     std::shared_ptr<EffectStackModel> getClipEffectStack(int itemId);
     std::shared_ptr<EffectStackModel> getTrackEffectStackModel(int trackId);
 
-    /** @brief Add slowmotion effect to clip in timeline. */
-    bool requestClipTimeWarp(int clipId, int trackId, int blankSpace, double speed, Fun &undo, Fun &redo);
-    bool changeItemSpeed(int clipId, int speed);
+    /** @brief Add slowmotion effect to clip in timeline.
+     @param clipId id of the target clip
+    @param speed: speed in percentage. 100 corresponds to original speed, 50 to half the speed
+    This functions create an undo object and also apply the effect to the corresponding audio if there is any.
+    Returns true on success, false otherwise (and nothing is modifed)
+    */
+    bool requestClipTimeWarp(int clipId, double speed);
+    /* @brief Same function as above, but doesn't check for paired audio and accumulate undo/redo
+     */
+    bool requestClipTimeWarp(int clipId, double speed, Fun &undo, Fun &redo);
+
     void replugClip(int clipId);
+
+    /** @brief Refresh the tractor profile in case a change was requested. */
+    void updateProfile(Mlt::Profile *profile);
 
 protected:
     /* @brief Register a new track. This is a call-back meant to be called from TrackModel
@@ -523,11 +585,11 @@ protected:
     void registerTrack(std::shared_ptr<TrackModel> track, int pos = -1, bool doInsert = true, bool reloadView = true);
 
     /* @brief Register a new clip. This is a call-back meant to be called from ClipModel
-    */
+     */
     void registerClip(const std::shared_ptr<ClipModel> &clip);
 
     /* @brief Register a new composition. This is a call-back meant to be called from CompositionModel
-    */
+     */
     void registerComposition(const std::shared_ptr<CompositionModel> &composition);
 
     /* @brief Register a new group. This is a call-back meant to be called from GroupsModel
@@ -584,6 +646,9 @@ protected:
     /** @brief Get a track tag (A1, V1, V2,...) through its id */
     const QString getTrackTagById(int trackId) const;
 
+    /** @brief Attempt to make a clip move without ever updating the view */
+    bool requestClipMoveAttempt(int clipId, int trackId, int position);
+
 public:
     /* @brief Debugging function that checks consistency with Mlt objects */
     bool checkConsistency();
@@ -603,6 +668,8 @@ signals:
     void invalidateZone(int in, int out);
     /* @brief signal triggered when a track duration changed (insertion/deletion) */
     void durationUpdated();
+    /* @brief an item was deleted, make sure it is removed from selection */
+    void removeFromSelection(int id);
 
 protected:
     std::unique_ptr<Mlt::Tractor> m_tractor;
@@ -644,7 +711,7 @@ protected:
 
     // The index of the temporary overlay track in tractor, or -1 if not connected
     int m_overlayTrackCount;
-    
+
     // The preferred audio target for clip insertion or -1 if not defined
     int m_audioTarget;
     // The preferred video target for clip insertion or -1 if not defined
@@ -658,6 +725,7 @@ protected:
     virtual void _endInsertRows() = 0;
     virtual void notifyChange(const QModelIndex &topleft, const QModelIndex &bottomright, bool start, bool duration, bool updateThumb) = 0;
     virtual void notifyChange(const QModelIndex &topleft, const QModelIndex &bottomright, const QVector<int> &roles) = 0;
+    virtual void notifyChange(const QModelIndex &topleft, const QModelIndex &bottomright, int role) = 0;
     virtual QModelIndex makeClipIndexFromID(int) const = 0;
     virtual QModelIndex makeCompositionIndexFromID(int) const = 0;
     virtual QModelIndex makeTrackIndexFromID(int) const = 0;

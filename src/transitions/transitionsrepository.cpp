@@ -38,11 +38,41 @@ TransitionsRepository::TransitionsRepository()
     : AbstractAssetsRepository<TransitionType>()
 {
     init();
+    QStringList invalidTransition;
+    for (const QString &effect : KdenliveSettings::favorite_transitions()) {
+        if (!exists(effect)) {
+            invalidTransition << effect;
+        }
+    }
+    if (!invalidTransition.isEmpty()) {
+        pCore->displayMessage(i18n("Some of your favorite compositions are invalid and were removed: %1", invalidTransition.join(QLatin1Char(','))), ErrorMessage);
+        QStringList newFavorites = KdenliveSettings::favorite_transitions();
+        for (const QString &effect : invalidTransition) {
+            newFavorites.removeAll(effect);
+        }
+        KdenliveSettings::setFavorite_transitions(newFavorites);
+    }
 }
 
 Mlt::Properties *TransitionsRepository::retrieveListFromMlt()
 {
     return pCore->getMltRepository()->transitions();
+}
+
+void TransitionsRepository::parseFavorites()
+{
+    m_favorites = KdenliveSettings::favorite_transitions().toSet();
+}
+
+void TransitionsRepository::setFavorite(const QString &id, bool favorite)
+{
+    Q_ASSERT(exists(id));
+    if (favorite) {
+        m_favorites << id;
+    } else {
+        m_favorites.remove(id);
+    }
+    KdenliveSettings::setFavorite_transitions(QStringList::fromSet(m_favorites));
 }
 
 Mlt::Properties *TransitionsRepository::getMetadata(const QString &assetId)
@@ -81,6 +111,10 @@ void TransitionsRepository::parseCustomAssetFile(const QString &file_name, std::
             qDebug() << "Warning: duplicate custom definition of transition" << result.id << "found. Only last one will be considered";
         }
         result.xml = currentNode.toElement();
+        QString type = result.xml.attribute(QStringLiteral("type"), QString());
+        if (type == QLatin1String("hidden")) {
+            result.type = TransitionType::Hidden;
+        }
         customAssets[result.id] = result;
     }
 }

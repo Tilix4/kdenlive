@@ -25,6 +25,8 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "definitions.h"
 #include <KIO/DirectorySizeJob>
 #include <QDir>
+#include <QTreeWidgetItem>
+#include <QWidget>
 
 class KdenliveDoc;
 class QPaintEvent;

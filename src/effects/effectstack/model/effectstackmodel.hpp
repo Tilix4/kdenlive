@@ -32,7 +32,9 @@
 #include <unordered_set>
 
 /* @brief This class an effect stack as viewed by the back-end.
-   It is responsible for planting and managing effects into the producer it holds a pointer to.
+   It is responsible for planting and managing effects into the list of producer it holds a pointer to.
+   It can contains more than one producer for example if it represents the effect stack of a projectClip: this clips contains several producers (audio, video,
+   ...)
  */
 class AbstractEffectItem;
 class AssetParameterModel;
@@ -51,7 +53,6 @@ public:
        @param ownerId is some information about the actual object to which the effects are applied
     */
     static std::shared_ptr<EffectStackModel> construct(std::weak_ptr<Mlt::Service> service, ObjectId ownerId, std::weak_ptr<DocUndoStack> undo_stack);
-    void resetService(std::weak_ptr<Mlt::Service> service);
 
 protected:
     EffectStackModel(std::weak_ptr<Mlt::Service> service, ObjectId ownerId, std::weak_ptr<DocUndoStack> undo_stack);
@@ -98,12 +99,29 @@ public:
 
     int getFadePosition(bool fromStart);
     Q_INVOKABLE void adjust(const QString &effectId, const QString &effectName, double value);
-    Q_INVOKABLE bool hasFilter(const QString &effectId);
-    Q_INVOKABLE double getFilter(const QString &effectId, const QString &paramName);
+
+    /* @brief Returns true if the stack contains an effect with the given Id */
+    Q_INVOKABLE bool hasFilter(const QString &effectId) const;
+    // TODO: this break the encapsulation, remove
+    Q_INVOKABLE double getFilterParam(const QString &effectId, const QString &paramName);
     /** get the active effect's keyframe model */
     Q_INVOKABLE KeyframeModel *getEffectKeyframeModel();
     /** Remove unwanted fade effects, mostly after a cut operation */
     void cleanFadeEffects(bool outEffects, Fun &undo, Fun &redo);
+
+    /* Remove all the services associated with this stack and replace them with the given one */
+    void resetService(std::weak_ptr<Mlt::Service> service);
+
+    /* @brief Append a new service to be managed by this stack */
+    void addService(std::weak_ptr<Mlt::Service> service);
+
+    /* @brief Remove a service from those managed by this stack */
+    void removeService(std::shared_ptr<Mlt::Service> service);
+
+    /* @brief Returns a comma separated list of effect names */
+    const QString effectNames() const;
+
+    bool isStackEnabled() const;
 
 public slots:
     /* @brief Delete an effect from the stack */
@@ -119,7 +137,7 @@ protected:
     /* @brief This is a convenience function that helps check if the tree is in a valid state */
     bool checkConsistency() override;
 
-    std::weak_ptr<Mlt::Service> m_service;
+    std::vector<std::weak_ptr<Mlt::Service>> m_services;
     bool m_effectStackEnabled;
     ObjectId m_ownerId;
 
@@ -143,6 +161,7 @@ signals:
     /** @brief: This signal is connected to the project clip for bin clips and activates the reload of effects on child (timeline) producers
      */
     void modelChanged();
+    void enabledStateChanged();
 };
 
 #endif

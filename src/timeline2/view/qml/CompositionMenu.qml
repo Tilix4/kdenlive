@@ -8,6 +8,10 @@ Menu {
         property int trackId
         property bool grouped
 
+        onAboutToHide: {
+            timeline.ungrabHack()
+        }
+
         function show() {
             //mergeItem.visible = timeline.mergeClipWithNext(trackIndex, index, true)
             popup()
@@ -22,7 +26,13 @@ Menu {
             text: i18n('Ungroup')
             onTriggered: timeline.unGroupSelection(clipId)
         }
-
+        MenuItem {
+            text: i18n('Edit Duration')
+            onTriggered: {
+                //compositionMenu.close()
+                timeline.editItemDuration(clipId)
+            }
+        }
         MenuItem {
             visible: true
             text: i18n('Copy')

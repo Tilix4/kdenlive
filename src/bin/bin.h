@@ -24,8 +24,6 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #define KDENLIVE_BIN_H
 
 #include "abstractprojectitem.h"
-#include "effects/effectstack/model/effectstackmodel.hpp"
-#include "filewatcher.hpp"
 #include "timecode.h"
 
 #include <KMessageWidget>
@@ -40,29 +38,30 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include <QPainter>
 #include <QPushButton>
 #include <QStyledItemDelegate>
+#include <QTreeView>
 #include <QUrl>
 #include <QWidget>
 
-class KdenliveDoc;
-class QVBoxLayout;
-class QScrollArea;
+class AbstractProjectItem;
+class BinItemDelegate;
 class ClipController;
-class QDockWidget;
-class QTimeLine;
-class QToolBar;
-class QMenu;
-class QToolButton;
-class QUndoCommand;
-class ProjectItemModel;
+class EffectStackModel;
+class InvalidDialog;
+class KdenliveDoc;
+class Monitor;
 class ProjectClip;
 class ProjectFolder;
-class AbstractProjectItem;
-class Monitor;
-class ProjectSortProxyModel;
 class ProjectFolderUp;
-class InvalidDialog;
-class BinItemDelegate;
-class BinMessageWidget;
+class ProjectItemModel;
+class ProjectSortProxyModel;
+class QDockWidget;
+class QMenu;
+class QScrollArea;
+class QTimeLine;
+class QToolBar;
+class QToolButton;
+class QUndoCommand;
+class QVBoxLayout;
 class SmallJobLabel;
 
 namespace Mlt {
@@ -107,20 +106,6 @@ private:
 
 signals:
     void focusView();
-};
-
-class BinMessageWidget : public KMessageWidget
-{
-    Q_OBJECT
-public:
-    explicit BinMessageWidget(QWidget *parent = nullptr);
-    BinMessageWidget(const QString &text, QWidget *parent = nullptr);
-
-protected:
-    bool event(QEvent *ev) override;
-
-signals:
-    void messageClosing();
 };
 
 class SmallJobLabel : public QPushButton
@@ -217,20 +202,11 @@ public:
 
     const QString getDocumentProperty(const QString &key);
 
-    /** @brief A proxy clip was just created, pass it to the responsible item  */
-    void gotProxy(const QString &id, const QString &path);
-
-    /** @brief Give a number available for a clip id, used when adding a new clip to the project. Id must be unique */
-    int getFreeClipId();
-
-    /** @brief Give a number available for a folder id, used when adding a new folder to the project. Id must be unique */
-    int getFreeFolderId();
-
-    /** @brief Returns the id of the last inserted clip */
-    int lastClipId() const;
-
     /** @brief Ask MLT to reload this clip's producer  */
     void reloadClip(const QString &id);
+
+    /** @brief refresh monitor (if clip changed)  */
+    void reloadMonitorIfActive(const QString &id);
 
     void doMoveClip(const QString &id, const QString &newParentId);
     void doMoveFolder(const QString &id, const QString &newParentId);
@@ -276,8 +252,6 @@ public:
     QDockWidget *clipPropertiesDock();
     /** @brief Returns a document's cache dir. ok is set to false if folder does not exist */
     QDir getCacheDir(CacheType type, bool *ok) const;
-    /** @brief Command adding a bin clip */
-    bool addClip(QDomElement elem, const QString &clipId);
     void rebuildProxies();
     /** @brief Return a list of all clips hashes used in this project */
     QStringList getProxyHashList();
@@ -287,8 +261,6 @@ public:
     QString getCurrentFolder();
     /** @brief Save a clip zone as MLT playlist */
     void saveZone(const QStringList &info, const QDir &dir);
-    void addWatchFile(const QString &binId, const QString &url);
-    void removeWatchFile(const QString &binId, const QString &url);
 
     // TODO refac: remove this and call directly the function in ProjectItemModel
     void cleanup();
@@ -405,7 +377,6 @@ private:
     ProjectSortProxyModel *m_proxyModel;
     QToolBar *m_toolbar;
     KdenliveDoc *m_doc;
-    FileWatcher m_fileWatcher;
     QLineEdit *m_searchLine;
     QToolButton *m_addButton;
     QMenu *m_extractAudioAction;
@@ -414,10 +385,6 @@ private:
     QAction *m_inTimelineAction;
     QAction *m_showDate;
     QAction *m_showDesc;
-    /** @brief Holds an available unique id for a clip to be created */
-    int m_clipCounter;
-    /** @brief Holds an available unique id for a folder to be created */
-    int m_folderCounter;
     /** @brief Default view type (icon, tree, ...) */
     BinViewType m_listType;
     /** @brief Default icon size for the views. */
@@ -445,7 +412,7 @@ private:
     QAction *m_discardPendingJobs;
     SmallJobLabel *m_infoLabel;
     /** @brief The info widget for failed jobs. */
-    BinMessageWidget *m_infoMessage;
+    KMessageWidget *m_infoMessage;
     QStringList m_errorLog;
     InvalidDialog *m_invalidClipDialog;
     /** @brief Set to true if widget just gained focus (means we have to update effect stack . */

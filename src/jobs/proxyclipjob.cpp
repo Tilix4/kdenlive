@@ -30,15 +30,14 @@
 
 #include <QProcess>
 #include <QTemporaryFile>
-#include <QProcess>
 
 #include <klocalizedstring.h>
-
 
 ProxyJob::ProxyJob(const QString &binId)
     : AbstractClipJob(PROXYJOB, binId)
     , m_jobDuration(0)
     , m_isFfmpegJob(true)
+    , m_jobProcess(nullptr)
     , m_done(false)
 {
 }
@@ -48,17 +47,16 @@ const QString ProxyJob::getDescription() const
     return i18n("Creating proxy %1", m_clipId);
 }
 
-
 bool ProxyJob::startJob()
 {
     auto binClip = pCore->projectItemModel()->getClipByBinID(m_clipId);
     const QString dest = binClip->getProducerProperty(QStringLiteral("kdenlive:proxy"));
-    if (QFile::exists(dest)) {
+    if (binClip->getProducerIntProperty(QStringLiteral("_overwriteproxy")) == 0 && QFile::exists(dest) && QFileInfo(dest).size() > 0) {
         // Proxy clip already created
         m_done = true;
         return true;
     }
-    ClipType type = binClip->clipType();
+    ClipType::ProducerType type = binClip->clipType();
     bool result;
     QString source = binClip->getProducerProperty(QStringLiteral("kdenlive:originalurl"));
     int exif = binClip->getProducerIntProperty(QStringLiteral("_exif_orientation"));
@@ -140,6 +138,7 @@ bool ProxyJob::startJob()
 
         m_jobProcess = new QProcess;
         m_jobProcess->setProcessChannelMode(QProcess::MergedChannels);
+        connect(this, &ProxyJob::jobCanceled, m_jobProcess, &QProcess::kill, Qt::DirectConnection);
         connect(m_jobProcess, &QProcess::readyReadStandardOutput, this, &ProxyJob::processLogInfo);
         m_jobProcess->start(KdenliveSettings::rendererpath(), mltParameters);
         m_jobProcess->waitForFinished(-1);
@@ -209,8 +208,34 @@ bool ProxyJob::startJob()
             m_done = true;
             return false;
         }
-        const QString proxyParams = pCore->currentDoc()->getDocumentProperty(QStringLiteral("proxyparams")).simplified();
-        if (proxyParams.contains(QStringLiteral("-noautorotate"))) {
+        m_jobDuration = (int) binClip->duration().seconds();
+        parameters << QStringLiteral("-y") << QStringLiteral("-v")<< QStringLiteral("quiet")<<QStringLiteral("-stats");
+        QString proxyParams = pCore->currentDoc()->getDocumentProperty(QStringLiteral("proxyparams")).simplified();
+        if (proxyParams.isEmpty()) {
+            // Automatic setting, decide based on hw support
+            proxyParams = pCore->currentDoc()->getAutoProxyProfile();
+        }
+        bool nvenc = proxyParams.contains(QStringLiteral("%nvcodec"));
+        if (nvenc) {
+            QString pix_fmt = binClip->videoCodecProperty(QStringLiteral("pix_fmt"));
+            QString codec = binClip->videoCodecProperty(QStringLiteral("name"));
+            QStringList supportedCodecs {QStringLiteral("hevc"),QStringLiteral("h264"),QStringLiteral("mjpeg"),QStringLiteral("mpeg1"),QStringLiteral("mpeg2"),QStringLiteral("mpeg4"),QStringLiteral("vc1"),QStringLiteral("vp8"),QStringLiteral("vp9")};
+            QStringList supportedPixFmts {QStringLiteral("yuv420p"),QStringLiteral("yuyv422"),QStringLiteral("rgb24"),QStringLiteral("bgr24"),QStringLiteral("yuv422p"),QStringLiteral("yuv444p"),QStringLiteral("rgb32"),QStringLiteral("yuv410p"),QStringLiteral("yuv411p")};
+            bool supported = supportedCodecs.contains(codec) && supportedPixFmts.contains(pix_fmt);
+            if (supported) {
+                // Full hardware decoding supported
+                codec.append(QStringLiteral("_cuvid"));
+                proxyParams.replace(QStringLiteral("%nvcodec"), codec);
+            } else {
+                proxyParams = proxyParams.section(QStringLiteral("-i"), 1);
+                proxyParams.replace(QStringLiteral("scale_cuda"), QStringLiteral("scale"));
+                if (!supportedPixFmts.contains(pix_fmt)) {
+                    proxyParams.prepend(QStringLiteral("-pix_fmt yuv420p"));
+                }
+            }
+        }
+        bool disableAutorotate = binClip->getProducerProperty(QStringLiteral("autorotate")) == QLatin1String("0");
+        if (disableAutorotate || proxyParams.contains(QStringLiteral("-noautorotate"))) {
             // The noautorotate flag must be passed before input source
             parameters << QStringLiteral("-noautorotate");
         }
@@ -231,11 +256,12 @@ bool ProxyJob::startJob()
         }
 
         // Make sure we don't block when proxy file already exists
-        parameters << QStringLiteral("-y");
         parameters << dest;
+        qDebug()<<"/// FULL PROXY PARAMS:\n"<<parameters<<"\n------";
         m_jobProcess = new QProcess;
         m_jobProcess->setProcessChannelMode(QProcess::MergedChannels);
         connect(m_jobProcess, &QProcess::readyReadStandardOutput, this, &ProxyJob::processLogInfo);
+        connect(this, &ProxyJob::jobCanceled, m_jobProcess, &QProcess::kill, Qt::DirectConnection);
         m_jobProcess->start(KdenliveSettings::ffmpegpath(), parameters, QIODevice::ReadOnly);
         m_jobProcess->waitForFinished(-1);
         result = m_jobProcess->exitStatus() == QProcess::NormalExit;
@@ -243,6 +269,7 @@ bool ProxyJob::startJob()
     // remove temporary playlist if it exists
     if (result) {
         if (QFileInfo(dest).size() == 0) {
+            QFile::remove(dest);
             // File was not created
             m_done = false;
             m_errorMessage.append(i18n("Failed to create proxy clip."));
@@ -255,36 +282,54 @@ bool ProxyJob::startJob()
         m_done = false;
         m_errorMessage.append(QString::fromUtf8(m_jobProcess->readAll()));
     }
-    delete m_jobProcess;
+    m_jobProcess->deleteLater();
     return result;
 }
 
 void ProxyJob::processLogInfo()
 {
+    m_buffer.append(QString::fromUtf8(m_jobProcess->readAllStandardOutput()));
+    // reading data from process sometimes returns half a line. To get a correct parsing
+    // we need to store it in a buffer and cut the lines manually
+    int lineFeed = m_buffer.lastIndexOf(QRegExp("[\n\r]"));
+    if (lineFeed == -1) {
+        return;
+    }
+    const QString buffer = m_buffer.left(lineFeed);
+    m_buffer.remove(0, lineFeed + 1);
     int progress;
-    const QString log = QString::fromUtf8(m_jobProcess->readAll());
     if (m_isFfmpegJob) {
         // Parse FFmpeg output
         if (m_jobDuration == 0) {
-            if (log.contains(QLatin1String("Duration:"))) {
-                QString data = log.section(QStringLiteral("Duration:"), 1, 1).section(QLatin1Char(','), 0, 0).simplified();
-                QStringList numbers = data.split(QLatin1Char(':'));
-                m_jobDuration = (int)(numbers.at(0).toInt() * 3600 + numbers.at(1).toInt() * 60 + numbers.at(2).toDouble());
+            if (buffer.contains(QLatin1String("Duration:"))) {
+                QString data = buffer.section(QStringLiteral("Duration:"), 1, 1).section(QLatin1Char(','), 0, 0).simplified();
+                if (!data.isEmpty()) {
+                    QStringList numbers = data.split(QLatin1Char(':'));
+                    if (numbers.size() < 3) {
+                        return;
+                    }
+                    m_jobDuration = (int)(numbers.at(0).toInt() * 3600 + numbers.at(1).toInt() * 60 + numbers.at(2).toDouble());
+                }
             }
-        } else if (log.contains(QLatin1String("time="))) {
-            QString time = log.section(QStringLiteral("time="), 1, 1).simplified().section(QLatin1Char(' '), 0, 0);
-            if (time.contains(QLatin1Char(':'))) {
+        } else if (buffer.contains(QLatin1String("time="))) {
+            QString time = buffer.section(QStringLiteral("time="), 1, 1).simplified().section(QLatin1Char(' '), 0, 0);
+            if (!time.isEmpty()) {
                 QStringList numbers = time.split(QLatin1Char(':'));
-                progress = numbers.at(0).toInt() * 3600 + numbers.at(1).toInt() * 60 + numbers.at(2).toDouble();
-            } else {
-                progress = (int)time.toDouble();
+                if (numbers.size() < 3) {
+                    progress = (int)time.toDouble();
+                    if (progress == 0) {
+                        return;
+                    }
+                } else {
+                    progress = numbers.at(0).toInt() * 3600 + numbers.at(1).toInt() * 60 + numbers.at(2).toDouble();
+                }
             }
             emit jobProgress((int)(100.0 * progress / m_jobDuration));
         }
     } else {
         // Parse MLT output
-        if (log.contains(QLatin1String("percentage:"))) {
-            progress = log.section(QStringLiteral("percentage:"), 1).simplified().section(QLatin1Char(' '), 0, 0).toInt();
+        if (buffer.contains(QLatin1String("percentage:"))) {
+            progress = buffer.section(QStringLiteral("percentage:"), 1).simplified().section(QLatin1Char(' '), 0, 0).toInt();
             emit jobProgress(progress);
         }
     }
@@ -300,15 +345,16 @@ bool ProxyJob::commitResult(Fun &undo, Fun &redo)
         return false;
     }
     m_resultConsumed = true;
-    auto operation = [ clipId = m_clipId ]()
+    auto operation = [clipId = m_clipId]()
     {
         auto binClip = pCore->projectItemModel()->getClipByBinID(clipId);
+        binClip->setProducerProperty(QStringLiteral("_overwriteproxy"), QString());
         const QString dest = binClip->getProducerProperty(QStringLiteral("kdenlive:proxy"));
         binClip->setProducerProperty(QStringLiteral("resource"), dest);
         pCore->bin()->reloadClip(clipId);
         return true;
     };
-    auto reverse = [ clipId = m_clipId ]()
+    auto reverse = [clipId = m_clipId]()
     {
         auto binClip = pCore->projectItemModel()->getClipByBinID(clipId);
         const QString dest = binClip->getProducerProperty(QStringLiteral("kdenlive:originalurl"));

@@ -27,6 +27,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #include "undohelper.hpp"
 
 #include <QDateTime>
+#include <QIcon>
 #include <QObject>
 #include <QReadWriteLock>
 
@@ -120,12 +121,14 @@ public:
         ItemTypeRole,
         // Duration of the clip
         DataDuration,
+        // Inpoint of the subclip (0 for clips)
+        DataInPoint,
         // If there is a running job, which type
         JobType,
         // Current progress of the job
         JobProgress,
         // error message if job crashes (not fully implemented)
-        JobMessage,
+        JobSuccess,
         JobStatus,
         // Item status (ready or not, missing, waiting, ...)
         ClipStatus
@@ -142,7 +145,7 @@ public:
      *
      * This function is necessary for interaction with ProjectItemModel.
      */
-    QVariant getData(DataType type) const;
+    virtual QVariant getData(DataType type) const;
 
     /**
      * @brief Returns the amount of different types of data this item supports.
@@ -193,6 +196,7 @@ protected:
     QString m_description;
     QIcon m_thumbnail;
     QString m_duration;
+    int m_inPoint;
     QDateTime m_date;
     QString m_binId;
     uint m_usage;

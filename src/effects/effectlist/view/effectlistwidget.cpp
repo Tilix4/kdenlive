@@ -26,6 +26,8 @@
 
 #include <QQmlContext>
 #include <QStandardPaths>
+#include <KActionCategory>
+#include <QMenu>
 
 EffectListWidget::EffectListWidget(QWidget *parent)
     : AssetListWidget(parent)
@@ -47,6 +49,13 @@ EffectListWidget::EffectListWidget(QWidget *parent)
     setup();
 }
 
+void EffectListWidget::updateFavorite(const QModelIndex &index)
+{
+    m_proxyModel->dataChanged(index, index, QVector<int>());
+    m_proxyModel->reloadFilterOnFavorite();
+    emit reloadFavorites();
+}
+
 EffectListWidget::~EffectListWidget()
 {
     delete m_proxy;
@@ -61,6 +70,8 @@ void EffectListWidget::setFilterType(const QString &type)
         static_cast<EffectFilter *>(m_proxyModel.get())->setFilterType(true, EffectType::Audio);
     } else if (type == "custom") {
         static_cast<EffectFilter *>(m_proxyModel.get())->setFilterType(true, EffectType::Custom);
+    } else if (type == "favorites") {
+        static_cast<EffectFilter *>(m_proxyModel.get())->setFilterType(true, EffectType::Favorites);
     } else {
         static_cast<EffectFilter *>(m_proxyModel.get())->setFilterType(false, EffectType::Video);
     }
@@ -70,4 +81,14 @@ QString EffectListWidget::getMimeType(const QString &assetId) const
 {
     Q_UNUSED(assetId);
     return QStringLiteral("kdenlive/effect");
+}
+
+void EffectListWidget::reloadCustomEffect(const QString &path)
+{
+    static_cast<EffectTreeModel *>(m_model.get())->reloadEffect(path);
+}
+
+void EffectListWidget::reloadEffectMenu(QMenu *effectsMenu, KActionCategory *effectActions)
+{
+    m_model->reloadAssetMenu(effectsMenu, effectActions);
 }

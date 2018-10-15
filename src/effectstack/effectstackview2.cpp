@@ -30,7 +30,7 @@
 #include "project/transitionsettings.h"
 #include "timeline/clipitem.h"
 #include "timeline/transition.h"
-#include "utils/KoIconUtils.h"
+
 
 #include "kdenlive_debug.h"
 #include <KColorScheme>
@@ -105,7 +105,7 @@ void EffectStackView2::refreshIcons()
         if (ic.isNull() || ic.name().isEmpty()) {
             continue;
         }
-        QIcon newIcon = KoIconUtils::themedIcon(ic.name());
+        QIcon newIcon = QIcon::fromTheme(ic.name());
         m->setIcon(newIcon);
     }
     QList<QToolButton *> allButtons = this->findChildren<QToolButton *>();
@@ -115,7 +115,7 @@ void EffectStackView2::refreshIcons()
         if (ic.isNull() || ic.name().isEmpty()) {
             continue;
         }
-        QIcon newIcon = KoIconUtils::themedIcon(ic.name());
+        QIcon newIcon = QIcon::fromTheme(ic.name());
         m->setIcon(newIcon);
     }
 }
@@ -782,7 +782,7 @@ CollapsibleEffect *EffectStackView2::getEffectByIndex(int ix)
     return nullptr;
 }
 
-void EffectStackView2::slotUpdateEffectParams(const QDomElement &old, const QDomElement &e, int ix)
+void EffectStackView2::slotUpdateEffectParams(const QDomElement &old, const QDomElement &e, int ix, bool update)
 {
     if (m_status == TIMELINE_TRACK) {
         emit updateEffect(nullptr, m_trackindex, old, e, ix, false);
@@ -1245,7 +1245,7 @@ void EffectStackView2::setKeyframes(const QString &tag, const QString &keyframes
 // static
 const QString EffectStackView2::getStyleSheet()
 {
-    KColorScheme scheme(QApplication::palette().currentColorGroup(), KColorScheme::View, KSharedConfig::openConfig(KdenliveSettings::colortheme()));
+    KColorScheme scheme(QApplication::palette().currentColorGroup(), KColorScheme::View);
     QColor selected_bg = scheme.decoration(KColorScheme::FocusColor).color();
     QColor hgh = KColorUtils::mix(QApplication::palette().window().color(), selected_bg, 0.2);
     QColor hover_bg = scheme.decoration(KColorScheme::HoverColor).color();

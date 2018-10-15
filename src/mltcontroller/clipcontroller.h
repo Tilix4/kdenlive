@@ -61,6 +61,8 @@ public:
 public:
     virtual ~ClipController();
 
+    QMutex producerMutex;
+
     /** @brief Returns true if the master producer is valid */
     bool isValid();
 
@@ -85,7 +87,7 @@ public:
     const QString clipUrl() const;
 
     /** @brief Returns the clip's type as defined in definitions.h */
-    ClipType clipType() const;
+    ClipType::ProducerType clipType() const;
 
     /** @brief Returns the MLT's producer id */
     const QString binId() const;
@@ -128,6 +130,7 @@ public:
     const QSize getFrameSize() const;
     /** @brief Returns the clip duration as a string like 00:00:02:01. */
     const QString getStringDuration();
+    int getProducerDuration() const;
 
     /**
      * @brief Returns a pixmap created from a frame of the producer.
@@ -214,7 +217,7 @@ protected:
     QString m_path;
     int m_audioIndex;
     int m_videoIndex;
-    ClipType m_clipType;
+    ClipType::ProducerType m_clipType;
     bool m_hasLimitedDuration;
     QMutex m_effectMutex;
     void getInfoForProducer();

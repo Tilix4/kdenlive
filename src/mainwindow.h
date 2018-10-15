@@ -48,10 +48,10 @@
 class AssetPanel;
 class AudioGraphSpectrum;
 class EffectStackView2;
+class EffectBasket;
 class EffectListWidget;
 class TransitionListWidget;
 class EffectStackView;
-class EffectsListView;
 class KIconLoader;
 class KdenliveDoc;
 class Monitor;
@@ -88,10 +88,10 @@ public:
     static QMap<QString, QStringList> m_lumaFiles;
 
     /** @brief Adds an action to the action collection and stores the name. */
-    void addAction(const QString &name, QAction *action);
+    void addAction(const QString &name, QAction *action, KActionCategory *category = nullptr);
     /** @brief Adds an action to the action collection and stores the name. */
     QAction *addAction(const QString &name, const QString &text, const QObject *receiver, const char *member, const QIcon &icon = QIcon(),
-                       const QKeySequence &shortcut = QKeySequence());
+                       const QKeySequence &shortcut = QKeySequence(), KActionCategory *category = nullptr);
 
     /**
      * @brief Adds a new dock widget to this window.
@@ -148,9 +148,7 @@ private:
 
     QDockWidget *m_projectBinDock;
     QDockWidget *m_effectListDock;
-    EffectsListView *m_effectList;
     QDockWidget *m_transitionListDock;
-    EffectsListView *m_transitionList;
     TransitionListWidget *m_transitionList2;
     EffectListWidget *m_effectList2;
 
@@ -180,8 +178,9 @@ private:
     QMenu *m_effectsMenu;
     QMenu *m_transitionsMenu;
     QMenu *m_timelineContextMenu;
-    QMenu *m_timelineContextClipMenu;
+    QList <QAction *> m_timelineClipActions;
     QMenu *m_timelineContextTransitionMenu;
+    KDualAction *m_useTimelineZone;
 
     /** Action names that can be used in the slotDoAction() slot, with their i18n() names */
     QStringList m_actionNames;
@@ -215,7 +214,6 @@ private:
     QAction *m_playZone;
     QAction *m_loopClip;
     QAction *m_proxyClip;
-    QActionGroup *m_clipTypeGroup;
     QString m_theme;
     KIconLoader *m_iconLoader;
     KToolBar *m_timelineToolBar;
@@ -225,7 +223,6 @@ private:
     /** @brief initialize startup values, return true if first run. */
     bool readOptions();
     void saveOptions();
-    bool event(QEvent *e) override;
 
     void loadGenerators();
     /** @brief Instantiates a "Get Hot New Stuff" dialog.
@@ -241,7 +238,7 @@ private:
     KXMLGUIClient *m_extraFactory;
     bool m_themeInitialized;
     bool m_isDarkTheme;
-    QListWidget *m_effectBasket;
+    EffectBasket *m_effectBasket;
     /** @brief Update widget style. */
     void doChangeStyle();
     void updateActionsToolTip();
@@ -253,7 +250,7 @@ public slots:
     Q_SCRIPTABLE void setRenderingFinished(const QString &url, int status, const QString &error);
     Q_SCRIPTABLE void addProjectClip(const QString &url);
     Q_SCRIPTABLE void addTimelineClip(const QString &url);
-    Q_SCRIPTABLE void addEffect(const QString &effectName);
+    Q_SCRIPTABLE void addEffect(const QString &effectId);
     Q_SCRIPTABLE void scriptRender(const QString &url);
     Q_NOREPLY void exitApp();
 
@@ -270,6 +267,8 @@ public slots:
     void slotZoomIn(bool zoomOnMouse = false);
     /** @brief Increases the timeline zoom level by 1. */
     void slotZoomOut(bool zoomOnMouse = false);
+    /** @brief Enable or disable the use of timeline zone for edits. */
+    void slotSwitchTimelineZone(bool toggled);
 
 private slots:
     /** @brief Shows the shortcut dialog. */
@@ -280,10 +279,7 @@ private slots:
     void slotConnectMonitors();
     void slotUpdateMousePosition(int pos);
     void slotUpdateProjectDuration(int pos);
-    void slotAddEffect(const QDomElement &effect);
     void slotEditProjectSettings();
-
-    void slotSwitchTimelineZone(bool toggled);
     void slotSwitchMarkersComments();
     void slotSwitchSnap();
     void slotSwitchAutomaticTransition();
@@ -291,22 +287,24 @@ private slots:
     void slotStopRenderProject();
     void slotFullScreen();
     /** @brief if modified is true adds "modified" to the caption and enables the save button.
-    * (triggered by KdenliveDoc::setModified()) */
+     * (triggered by KdenliveDoc::setModified()) */
     void slotUpdateDocumentState(bool modified);
 
     /** @brief Sets the timeline zoom slider to @param value.
-    *
-    * Also disables zoomIn and zoomOut actions if they cannot be used at the moment. */
+     *
+     * Also disables zoomIn and zoomOut actions if they cannot be used at the moment. */
     void slotSetZoom(int value, bool zoomOnMouse = false);
     /** @brief Makes the timeline zoom level fit the timeline content. */
     void slotFitZoom();
     /** @brief Updates the zoom slider tooltip to fit @param zoomlevel. */
     void slotUpdateZoomSliderToolTip(int zoomlevel);
+    /** @brief Timeline was zoom, update slider to reflect that */
+    void updateZoomSlider(int value);
 
     /** @brief Displays the zoom slider tooltip.
-    * @param zoomlevel (optional) The zoom level to show in the tooltip.
-    *
-    * Adopted from Dolphin (src/statusbar/dolphinstatusbar.cpp) */
+     * @param zoomlevel (optional) The zoom level to show in the tooltip.
+     *
+     * Adopted from Dolphin (src/statusbar/dolphinstatusbar.cpp) */
     void slotShowZoomSliderToolTip(int zoomlevel = -1);
     /** @brief Deletes item in timeline, project tree or effect stack depending on focus. */
     void slotDeleteItem();
@@ -337,7 +335,7 @@ private slots:
     void slotDeselectTimelineTransition();
     void slotSelectAddTimelineClip();
     void slotSelectAddTimelineTransition();
-    void slotAddVideoEffect(QAction *result);
+    void slotAddEffect(QAction *result);
     void slotAddTransition(QAction *result);
     void slotAddProjectClip(const QUrl &url, const QStringList &folderInfo);
     void slotAddProjectClipList(const QList<QUrl> &urls);
@@ -375,10 +373,7 @@ private slots:
     /** @brief Select all clips in timeline. */
     void slotSelectAllTracks();
     void slotUnselectAllTracks();
-    void slotGetNewLumaStuff();
-    void slotGetNewKeyboardStuff();
-    void slotGetNewTitleStuff();
-    void slotGetNewRenderStuff();
+    void slotGetNewKeyboardStuff(QComboBox *schemesList);
     void slotAutoTransition();
     void slotRunWizard();
     void slotZoneMoved(int start, int end);
@@ -388,10 +383,11 @@ private slots:
     void slotEditItemDuration();
     void slotClipInProjectTree();
     // void slotClipToProjectTree();
-    void slotSplitAudio();
+    void slotSplitAV();
     void slotSetAudioAlignReference();
     void slotAlignAudio();
     void slotUpdateClipType(QAction *action);
+    void slotUpdateTimelineView(QAction *action);
     void slotShowTimeline(bool show);
     void slotTranscode(const QStringList &urls = QStringList());
     void slotTranscodeClip();
@@ -401,7 +397,7 @@ private slots:
     void slotPrepareRendering(bool scriptExport, bool zoneOnly, const QString &chapterFile, QString scriptPath = QString());
 
     /** @brief Switches between displaying frames or timecode.
-    * @param ix 0 = display timecode, 1 = display frames. */
+     * @param ix 0 = display timecode, 1 = display frames. */
     void slotUpdateTimecodeFormat(int ix);
 
     /** @brief Removes the focus of anything. */
@@ -431,8 +427,7 @@ private slots:
     /** @brief Move playhead to mouse curser position if defined key is pressed */
     void slotAlignPlayheadToMousePos();
 
-    void slotThemeChanged(const QString &);
-    void slotReloadTheme();
+    void slotThemeChanged(const QString &name);
     /** @brief Close Kdenlive and try to restart it */
     void slotRestart();
     void triggerKey(QKeyEvent *ev);
@@ -469,12 +464,13 @@ private slots:
     void updateAction();
     /** @brief Request adjust of timeline track height */
     void resetTimelineTracks();
+    /** @brief Set keyboard grabbing on current timeline item */
+    void slotGrabItem();
 
 signals:
     Q_SCRIPTABLE void abortRenderJob(const QString &url);
     void configurationChanged();
     void GUISetupDone();
-    void reloadTheme();
     void setPreviewProgress(int);
     void setRenderProgress(int);
     void displayMessage(const QString &, MessageType, int);

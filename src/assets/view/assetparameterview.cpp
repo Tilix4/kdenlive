@@ -38,8 +38,8 @@ AssetParameterView::AssetParameterView(QWidget *parent)
     , m_mainKeyframeWidget(nullptr)
 {
     m_lay = new QVBoxLayout(this);
-    m_lay->setContentsMargins(2, 2, 2, 2);
-    m_lay->setSpacing(2);
+    m_lay->setContentsMargins(0, 0, 0, 2);
+    m_lay->setSpacing(0);
     setFont(QFontDatabase::systemFont(QFontDatabase::SmallestReadableFont));
 }
 
@@ -63,14 +63,14 @@ void AssetParameterView::setModel(const std::shared_ptr<AssetParameterModel> &mo
             QModelIndex index = model->index(i, 0);
             auto type = model->data(index, AssetParameterModel::TypeRole).value<ParamType>();
             if (m_mainKeyframeWidget &&
-            (type == ParamType::Geometry || type == ParamType::Animated || type == ParamType::RestrictedAnim || type == ParamType::KeyframeParam)) {
+                (type == ParamType::Geometry || type == ParamType::Animated || type == ParamType::RestrictedAnim || type == ParamType::KeyframeParam)) {
                 // Keyframe widget can have some extra params that should'nt build a new widget
                 qDebug() << "// FOUND ADDED PARAM";
                 m_mainKeyframeWidget->addParameter(index);
             } else {
                 auto w = AbstractParamWidget::construct(model, index, frameSize, this);
                 connect(this, &AssetParameterView::initKeyframeView, w, &AbstractParamWidget::slotInitMonitor);
-                if (type == ParamType::KeyframeParam || type == ParamType::AnimatedRect ) {
+                if (type == ParamType::KeyframeParam || type == ParamType::AnimatedRect || type == ParamType::Roto_spline) {
                     m_mainKeyframeWidget = static_cast<KeyframeWidget *>(w);
                 }
                 connect(w, &AbstractParamWidget::valueChanged, this, &AssetParameterView::commitChanges);
@@ -95,8 +95,7 @@ void AssetParameterView::resetValues()
         m_model->setParameter(name, defaultValue);
         if (m_mainKeyframeWidget) {
             // Handles additionnal params like rotation so only refresh initial param at the end
-        }
-        else if (type == ParamType::ColorWheel) {
+        } else if (type == ParamType::ColorWheel) {
             if (i == m_model->rowCount() - 1) {
                 // Special case, the ColorWheel widget handles several params, so only refresh once when all parameters were set.
                 QModelIndex firstIndex = m_model->index(0, 0);
@@ -156,7 +155,7 @@ void AssetParameterView::refresh(const QModelIndex &topLeft, const QModelIndex &
     QMutexLocker lock(&m_lock);
     if (m_widgets.size() == 0) {
         // no visible param for this asset, abort
-        qDebug()<<"/// ASKING REFRESH... EMPTY WIDGET";
+        qDebug() << "/// ASKING REFRESH... EMPTY WIDGET";
         return;
     }
     Q_UNUSED(roles);
@@ -168,7 +167,8 @@ void AssetParameterView::refresh(const QModelIndex &topLeft, const QModelIndex &
     } else {
         auto type = m_model->data(m_model->index(bottomRight.row(), 0), AssetParameterModel::TypeRole).value<ParamType>();
         if (type == ParamType::ColorWheel) {
-            // Some special widgets, like colorwheel handle multiple params so we can have cases where param index row is greater than the number of widgets. Should be better managed
+            // Some special widgets, like colorwheel handle multiple params so we can have cases where param index row is greater than the number of widgets.
+            // Should be better managed
             m_widgets[0]->slotRefresh();
             return;
         }
@@ -181,13 +181,13 @@ void AssetParameterView::refresh(const QModelIndex &topLeft, const QModelIndex &
 
 int AssetParameterView::contentHeight() const
 {
-    return m_lay->sizeHint().height();
+    return m_lay->minimumSize().height();
 }
 
 MonitorSceneType AssetParameterView::needsMonitorEffectScene() const
 {
     if (m_mainKeyframeWidget) {
-        return MonitorSceneGeometry;
+        return m_mainKeyframeWidget->requiredScene();
     }
     for (int i = 0; i < m_model->rowCount(); ++i) {
         QModelIndex index = m_model->index(i, 0);
@@ -217,4 +217,21 @@ MonitorSceneType AssetParameterView::needsMonitorEffectScene() const
 void AssetParameterView::slotRefresh()
 {
     refresh(m_model->index(0, 0), m_model->index(m_model->rowCount() - 1, 0), {});
+}
+
+bool AssetParameterView::keyframesAllowed() const
+{
+    return m_mainKeyframeWidget != nullptr;
+}
+
+bool AssetParameterView::modelHideKeyframes() const
+{
+    return m_mainKeyframeWidget != nullptr && !m_mainKeyframeWidget->keyframesVisible();
+}
+
+void AssetParameterView::toggleKeyframes(bool enable)
+{
+    if (m_mainKeyframeWidget) {
+        m_mainKeyframeWidget->showKeyframes(enable);
+    }
 }

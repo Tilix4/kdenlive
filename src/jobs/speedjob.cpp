@@ -32,9 +32,9 @@
 #include "project/clipstabilize.h"
 #include "ui_scenecutdialog_ui.h"
 
+#include <QInputDialog>
 #include <QScopedPointer>
 #include <klocalizedstring.h>
-#include <QInputDialog>
 
 #include <mlt++/Mlt.h>
 
@@ -53,7 +53,7 @@ const QString SpeedJob::getDescription() const
 
 void SpeedJob::configureConsumer()
 {
-    m_consumer.reset(new Mlt::Consumer(m_profile, "xml", m_destUrl.toUtf8().constData()));
+    m_consumer.reset(new Mlt::Consumer(*m_profile.get(), "xml", m_destUrl.toUtf8().constData()));
     m_consumer->set("terminate_on_pause", 1);
     m_consumer->set("title", "Speed Change");
     m_consumer->set("real_time", -KdenliveSettings::mltthreads());
@@ -63,13 +63,11 @@ void SpeedJob::configureProducer()
 {
     if (!qFuzzyCompare(m_speed, 1.0)) {
         QString resource = m_producer->get("resource");
-        m_producer.reset(new Mlt::Producer(m_profile, "timewarp", QStringLiteral("%1:%2").arg(m_speed).arg(resource).toUtf8().constData()));
+        m_producer.reset(new Mlt::Producer(*m_profile.get(), "timewarp", QStringLiteral("%1:%2").arg(m_speed).arg(resource).toUtf8().constData()));
     }
 }
 
-void SpeedJob::configureFilter()
-{
-}
+void SpeedJob::configureFilter() {}
 
 // static
 int SpeedJob::prepareJob(std::shared_ptr<JobManager> ptr, const std::vector<QString> &binIds, int parentId, QString undoString)
@@ -87,14 +85,16 @@ int SpeedJob::prepareJob(std::shared_ptr<JobManager> ptr, const std::vector<QStr
         QString mltfile = QFileInfo(binClip->url()).absoluteFilePath() + QStringLiteral(".mlt");
         destinations[binId] = mltfile;
     }
-    // Now we have to create the jobs objects. This is trickier than usual, since the parameters are differents for each job (each clip has its own destination). We have to construct a lambda that does that.
+    // Now we have to create the jobs objects. This is trickier than usual, since the parameters are differents for each job (each clip has its own
+    // destination). We have to construct a lambda that does that.
 
-    auto createFn = [ dest = std::move(destinations), fSpeed = speed/100.0 ](const QString &id)
+    auto createFn = [ dest = std::move(destinations), fSpeed = speed / 100.0 ](const QString &id)
     {
         return std::make_shared<SpeedJob>(id, fSpeed, dest.at(id));
     };
 
-    // We are now all set to create the job. Note that we pass all the parameters directly through the lambda, hence there are no extra parameters to the function
+    // We are now all set to create the job. Note that we pass all the parameters directly through the lambda, hence there are no extra parameters to the
+    // function
     using local_createFn_t = std::function<std::shared_ptr<SpeedJob>(const QString &)>;
     return ptr->startJob<SpeedJob>(binIds, parentId, std::move(undoString), local_createFn_t(std::move(createFn)));
 }
@@ -137,4 +137,3 @@ bool SpeedJob::commitResult(Fun &undo, Fun &redo)
     auto id = ClipCreator::createClipFromFile(m_destUrl, folderId, pCore->projectItemModel(), undo, redo);
     return id != QStringLiteral("-1");
 }
-

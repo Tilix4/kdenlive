@@ -51,6 +51,7 @@ const QString AudioThumbJob::getDescription() const
 bool AudioThumbJob::computeWithMlt()
 {
     m_audioLevels.clear();
+    m_errorMessage.clear();
     // MLT audio thumbs: slower but safer
     QString service = m_prod->get("mlt_service");
     if (service == QLatin1String("avformat-novalidate")) {
@@ -60,6 +61,7 @@ bool AudioThumbJob::computeWithMlt()
     }
     QScopedPointer<Mlt::Producer> audioProducer(new Mlt::Producer(*m_prod->profile(), service.toUtf8().constData(), m_prod->get("resource")));
     if (!audioProducer->is_valid()) {
+        m_errorMessage.append(i18n("Audio thumbs: cannot open file %1", m_prod->get("resource")));
         return false;
     }
     audioProducer->set("video_index", "-1");
@@ -112,7 +114,7 @@ bool AudioThumbJob::computeWithFFMPEG()
     for (int i = 0; i < m_channels; i++) {
         std::unique_ptr<QTemporaryFile> channelTmpfile(new QTemporaryFile());
         if (!channelTmpfile->open()) {
-            m_errorMessage.append(i18n("Cannot create temporary file, check disk space and permissions\n"));
+            m_errorMessage.append(i18n("Audio thumbs: cannot create temporary file, check disk space and permissions\n"));
             return false;
         }
         channelTmpfile->close();
@@ -136,7 +138,8 @@ bool AudioThumbJob::computeWithFFMPEG()
     } else {
         QString aformat = QStringLiteral("[0:a%1]%2=100,channelsplit=channel_layout=%3")
                               .arg(m_audioStream > 0 ? ":" + QString::number(m_audioStream) : QString())
-                              .arg(isFFmpeg ? "aresample=async" : "aformat=sample_rates=").arg(m_channels > 2 ? "5.1" : "stereo");
+                              .arg(isFFmpeg ? "aresample=async" : "aformat=sample_rates=")
+                              .arg(m_channels > 2 ? "5.1" : "stereo");
         for (int i = 0; i < m_channels; ++i) {
             aformat.append(QStringLiteral("[0:%1]").arg(i));
         }
@@ -165,7 +168,7 @@ bool AudioThumbJob::computeWithFFMPEG()
             }
             if (res.isEmpty() || res.size() != dataSize) {
                 // Something went wrong, abort
-                m_errorMessage.append(i18n("Error reading audio thumbnail created with FFMPEG\n"));
+                m_errorMessage.append(i18n("Audio thumbs: error reading audio thumbnail created with FFmpeg\n"));
                 return false;
             }
             rawChannels.emplace_back((const qint16 *)res.constData());
@@ -195,7 +198,7 @@ bool AudioThumbJob::computeWithFFMPEG()
                 if (steps != 0) {
                     channelsData[k] /= steps;
                 }
-                m_audioLevels << channelsData[k] * factor;
+                m_audioLevels << (int) (channelsData[k] * factor);
             }
             int p = 80 + (i * 20 / m_lengthInFrames);
             if (p != progress) {
@@ -208,8 +211,9 @@ bool AudioThumbJob::computeWithFFMPEG()
     }
     QString err = m_ffmpegProcess->readAllStandardError();
     delete m_ffmpegProcess;
-    m_errorMessage += err;
-    m_errorMessage.append(i18n("Failed to create FFmpeg audio thumbnails, we now try to use MLT"));
+    //m_errorMessage += err;
+    //m_errorMessage.append(i18n("Failed to create FFmpeg audio thumbnails, we now try to use MLT"));
+    qWarning()<<"Failed to create FFmpeg audio thumbs:\n"<<err<<"\n---------------------";
     return false;
 }
 
@@ -220,7 +224,7 @@ void AudioThumbJob::updateFfmpegProgress()
     for (const QString &data : lines) {
         if (data.startsWith(QStringLiteral("out_time_ms"))) {
             double ms = data.section(QLatin1Char('='), 1).toDouble();
-            emit jobProgress((int) (ms / m_binClip->duration().ms() / 10));
+            emit jobProgress((int)(ms / m_binClip->duration().ms() / 10));
         } else {
             m_logDetails += data + QStringLiteral("\n");
         }
@@ -250,6 +254,7 @@ bool AudioThumbJob::startJob()
     m_lengthInFrames = m_prod->get_length();
     m_audioStream = m_binClip->audioInfo()->ffmpeg_audio_index();
     if ((m_prod == nullptr) || !m_prod->is_valid()) {
+        m_errorMessage.append(i18n("Audio thumbs: cannot open project file %1", m_binClip->url()));
         m_done = true;
         m_successful = false;
         return false;

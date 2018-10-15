@@ -38,10 +38,11 @@
 
 #include <mlt++/Mlt.h>
 
-SceneSplitJob::SceneSplitJob(const QString &binId, bool subClips, int markersType)
+SceneSplitJob::SceneSplitJob(const QString &binId, bool subClips, int markersType, int minInterval)
     : MeltJob(binId, STABILIZEJOB, true, -1, -1)
     , m_subClips(subClips)
     , m_markersType(markersType)
+    , m_minInterval(minInterval)
 {
 }
 
@@ -51,11 +52,11 @@ const QString SceneSplitJob::getDescription() const
 }
 void SceneSplitJob::configureConsumer()
 {
-    m_consumer.reset(new Mlt::Consumer(m_profile, "null"));
+    m_consumer.reset(new Mlt::Consumer(*m_profile.get(), "null"));
     m_consumer->set("all", 1);
     m_consumer->set("terminate_on_pause", 1);
     m_consumer->set("real_time", -KdenliveSettings::mltthreads());
-    // We just want to find scene change, set all mathods to the fastests
+    // We just want to find scene change, set all methods to the fastests
     m_consumer->set("rescale", "nearest");
     m_consumer->set("deinterlace_method", "onefield");
     m_consumer->set("top_field_first", -1);
@@ -64,7 +65,7 @@ void SceneSplitJob::configureConsumer()
 void SceneSplitJob::configureFilter()
 {
 
-    m_filter.reset(new Mlt::Filter(m_profile, "motion_est"));
+    m_filter.reset(new Mlt::Filter(*m_profile.get(), "motion_est"));
     if ((m_filter == nullptr) || !m_filter->is_valid()) {
         m_errorMessage.append(i18n("Cannot create filter motion_est. Cannot split scenes"));
         return;
@@ -76,9 +77,8 @@ void SceneSplitJob::configureFilter()
 
 void SceneSplitJob::configureProfile()
 {
-
-    m_profile.set_height(160);
-    m_profile.set_width(m_profile.height() * m_profile.sar());
+    m_profile->set_height(160);
+    m_profile->set_width(m_profile->height() * m_profile->sar());
 }
 
 // static
@@ -101,8 +101,9 @@ int SceneSplitJob::prepareJob(std::shared_ptr<JobManager> ptr, const std::vector
     }
     int markersType = ui.add_markers->isChecked() ? ui.marker_type->currentIndex() : -1;
     bool subclips = ui.cut_scenes->isChecked();
+    int minInterval = ui.minDuration->value();
 
-    return ptr->startJob_noprepare<SceneSplitJob>(binIds, parentId, std::move(undoString), subclips, markersType);
+    return ptr->startJob_noprepare<SceneSplitJob>(binIds, parentId, std::move(undoString), subclips, markersType, minInterval);
 }
 
 bool SceneSplitJob::commitResult(Fun &undo, Fun &redo)
@@ -125,6 +126,46 @@ bool SceneSplitJob::commitResult(Fun &undo, Fun &redo)
     }
 
     auto binClip = pCore->projectItemModel()->getClipByBinID(m_clipId);
+    QStringList markerData = result.split(QLatin1Char(';'));
+    if (m_markersType >= 0) {
+        // Build json data for markers
+        QJsonArray list;
+        int ix = 1;
+        int lastCut = 0;
+        for (const QString marker : markerData) {
+            int pos = marker.section(QLatin1Char('='), 0, 0).toInt();
+            if (m_minInterval > 0 && ix > 1 && pos - lastCut < m_minInterval) {
+                continue;
+            }
+            lastCut = pos;
+            QJsonObject currentMarker;
+            currentMarker.insert(QLatin1String("pos"), QJsonValue(pos));
+            currentMarker.insert(QLatin1String("comment"), QJsonValue(i18n("Scene %1", ix)));
+            currentMarker.insert(QLatin1String("type"), QJsonValue(m_markersType));
+            list.push_back(currentMarker);
+            ix++;
+        }
+        QJsonDocument json(list);
+        binClip->getMarkerModel()->importFromJson(QString(json.toJson()), true, undo, redo);
+    }
+    if (m_subClips) {
+        // Create zones
+        int ix = 1;
+        int lastCut = 0;
+        QMap <QString, QString> zoneData;
+        for (const QString marker : markerData) {
+            int pos = marker.section(QLatin1Char('='), 0, 0).toInt();
+            if (pos <= lastCut + 1 || pos - lastCut < m_minInterval) {
+                continue;
+            }
+            zoneData.insert(i18n("Scene %1", ix), QString("%1;%2").arg(lastCut).arg(pos - 1));
+            lastCut = pos;
+            ix++;
+        }
+        if (!zoneData.isEmpty()) {
+            pCore->projectItemModel()->loadSubClips(m_clipId, zoneData, undo, redo);
+        }
+    }
     qDebug() << "RESULT of the SCENESPLIT filter:" << result;
 
     // TODO refac: reimplement add markers and subclips

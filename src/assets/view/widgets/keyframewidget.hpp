@@ -33,8 +33,10 @@ class KeyframeView;
 class KeyframeModelList;
 class QVBoxLayout;
 class QToolButton;
+class QToolBar;
 class TimecodeDisplay;
 class KSelectAction;
+class KeyframeMonitorHelper;
 
 class KeyframeWidget : public AbstractParamWidget
 {
@@ -48,8 +50,16 @@ public:
     void addParameter(const QPersistentModelIndex &index);
     int getPosition() const;
     void addKeyframe(int pos = -1);
-
+    /** @brief Returns the monitor scene required for this asset
+     */
+    MonitorSceneType requiredScene() const;
     void updateTimecodeFormat();
+    /** @brief Show / hide keyframe related widgets
+     */
+    void showKeyframes(bool enable);
+    /** @brief Returns true if keyframes options are visible
+     */
+    bool keyframesVisible() const;
 
 public slots:
     void slotRefresh() override;
@@ -66,20 +76,25 @@ private slots:
     void slotAtKeyframe(bool atKeyframe, bool singleKeyframe);
     void monitorSeek(int pos);
     void slotEditKeyframeType(QAction *action);
+    void slotUpdateKeyframesFromMonitor(QPersistentModelIndex index, const QVariant &res);
 
 private:
     QVBoxLayout *m_lay;
+    QToolBar *m_toolbar;
     std::shared_ptr<KeyframeModelList> m_keyframes;
-
     KeyframeView *m_keyframeview;
+    KeyframeMonitorHelper *m_monitorHelper;
     QToolButton *m_buttonAddDelete;
     QToolButton *m_buttonPrevious;
     QToolButton *m_buttonNext;
     KSelectAction *m_selectType;
     TimecodeDisplay *m_time;
+    MonitorSceneType m_neededScene;
     void connectMonitor(bool active);
     std::unordered_map<QPersistentModelIndex, QWidget *> m_parameters;
 
+signals:
+    void addIndex(QPersistentModelIndex ix);
 };
 
 #endif

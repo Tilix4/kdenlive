@@ -29,11 +29,16 @@
 #include "bin/projectitemmodel.h"
 #include "core.h"
 #include "kdenlivesettings.h"
+
+#include <KLocalizedString>
+#include <QMessageBox>
 #include <QDebug>
 #include <QSet>
 #include <mlt++/MltPlaylist.h>
 #include <mlt++/MltProducer.h>
 #include <mlt++/MltTransition.h>
+
+static QString m_errorMessage;
 
 bool constructTrackFromMelt(const std::shared_ptr<TimelineItemModel> &timeline, int tid, Mlt::Tractor &track,
                             const std::unordered_map<QString, QString> &binIdCorresp, Fun &undo, Fun &redo);
@@ -46,6 +51,7 @@ bool constructTimelineFromMelt(const std::shared_ptr<TimelineItemModel> &timelin
     Fun redo = []() { return true; };
     // First, we destruct the previous tracks
     timeline->requestReset(undo, redo);
+    m_errorMessage.clear();
     std::unordered_map<QString, QString> binIdCorresp;
     pCore->projectItemModel()->loadBinPlaylist(&tractor, timeline->tractor(), binIdCorresp);
 
@@ -71,11 +77,12 @@ bool constructTimelineFromMelt(const std::shared_ptr<TimelineItemModel> &timelin
             bool audioTrack = track->get_int("kdenlive:audio_track") == 1;
             ok = timeline->requestTrackInsertion(-1, tid, QString(), audioTrack, undo, redo, false);
             int lockState = track->get_int("kdenlive:locked_track");
+            Mlt::Tractor local_tractor(*track);
+            ok = ok && constructTrackFromMelt(timeline, tid, local_tractor, binIdCorresp, undo, redo);
+            timeline->setTrackProperty(tid, QStringLiteral("kdenlive:thumbs_format"), track->get("kdenlive:thumbs_format"));
             if (lockState > 0) {
                 timeline->setTrackProperty(tid, QStringLiteral("kdenlive:locked_track"), QString::number(lockState));
             }
-            Mlt::Tractor local_tractor(*track);
-            ok = ok && constructTrackFromMelt(timeline, tid, local_tractor, binIdCorresp, undo, redo);
             break;
         }
         case playlist_type: {
@@ -91,10 +98,11 @@ bool constructTimelineFromMelt(const std::shared_ptr<TimelineItemModel> &timelin
                 timeline->setTrackProperty(tid, QStringLiteral("hide"), QString::number(muteState));
             }
             int lockState = local_playlist.get_int("kdenlive:locked_track");
+            ok = ok && constructTrackFromMelt(timeline, tid, local_playlist, binIdCorresp, undo, redo);
+            timeline->setTrackProperty(tid, QStringLiteral("kdenlive:thumbs_format"), local_playlist.get("kdenlive:thumbs_format"));
             if (lockState > 0) {
                 timeline->setTrackProperty(tid, QStringLiteral("kdenlive:locked_track"), QString::number(lockState));
             }
-            ok = ok && constructTrackFromMelt(timeline, tid, local_playlist, binIdCorresp, undo, redo);
             break;
         }
         default:
@@ -133,7 +141,9 @@ bool constructTimelineFromMelt(const std::shared_ptr<TimelineItemModel> &timelin
                                                        t->get_length(), &transProps, compoId, undo, redo);
             if (!ok) {
                 qDebug() << "ERROR : failed to insert composition in track " << t->get_b_track() << ", position" << t->get_in();
-                break;
+                timeline->requestItemDeletion(compoId, false);
+                m_errorMessage.append(i18n("Invalid composition found on track %1 at %2.\n", t->get_b_track(), t->get_in()));
+                continue;
             }
             qDebug() << "Inserted composition in track " << t->get_b_track() << ", position" << t->get_in() << "/" << t->get_out();
         }
@@ -147,6 +157,9 @@ bool constructTimelineFromMelt(const std::shared_ptr<TimelineItemModel> &timelin
         // TODO log error
         undo();
         return false;
+    }
+    if (!m_errorMessage.isEmpty()) {
+        QMessageBox::warning(qApp->activeWindow(), i18n("Project problems"), m_errorMessage, QMessageBox::Close);
     }
     return true;
 }
@@ -171,6 +184,7 @@ bool constructTrackFromMelt(const std::shared_ptr<TimelineItemModel> &timeline, 
             // Pass track properties
             int height = track.get_int("kdenlive:trackheight");
             timeline->setTrackProperty(tid, "kdenlive:trackheight", height == 0 ? "100" : QString::number(height));
+            timeline->setTrackProperty(tid, "kdenlive:collapsed", QString::number(track.get_int("kdenlive:collapsed")));
             QString trackName = track.get("kdenlive:track_name");
             if (!trackName.isEmpty()) {
                 timeline->setTrackProperty(tid, QStringLiteral("kdenlive:track_name"), trackName.toUtf8().constData());
@@ -179,6 +193,10 @@ bool constructTrackFromMelt(const std::shared_ptr<TimelineItemModel> &timeline, 
             if (audioTrack) {
                 // This is an audio track
                 timeline->setTrackProperty(tid, QStringLiteral("kdenlive:audio_track"), QStringLiteral("1"));
+                timeline->setTrackProperty(tid, QStringLiteral("hide"), QStringLiteral("1"));
+            } else {
+                // video track, hide audio
+                timeline->setTrackProperty(tid, QStringLiteral("hide"), QStringLiteral("2"));
             }
             int muteState = playlist.get_int("hide");
             if (muteState > 0 && (!audioTrack || (audioTrack && muteState != 1))) {
@@ -186,13 +204,15 @@ bool constructTrackFromMelt(const std::shared_ptr<TimelineItemModel> &timeline, 
             }
         }
     }
+    std::shared_ptr<Mlt::Service> serv = std::make_shared<Mlt::Service>(track.get_service());
+    timeline->importTrackEffects(tid, serv);
     return true;
 }
 
 namespace {
 
 // This function tries to recover the state of the producer (audio or video or both)
-PlaylistState::ClipState inferState(std::shared_ptr<Mlt::Producer> prod)
+PlaylistState::ClipState inferState(std::shared_ptr<Mlt::Producer> prod, bool audioTrack)
 {
     auto getProperty = [prod](const QString &name) {
         if (prod->parent().is_valid()) {
@@ -210,10 +230,10 @@ PlaylistState::ClipState inferState(std::shared_ptr<Mlt::Producer> prod)
     std::pair<bool, bool> VidAud{true, true};
     VidAud.first = getIntProperty("set.test_image") == 0;
     VidAud.second = getIntProperty("set.test_audio") == 0;
-    if (service.contains(QStringLiteral("avformat")) && getIntProperty(QStringLiteral("video_index")) == -1) {
+    if (audioTrack || (service.contains(QStringLiteral("avformat")) && getIntProperty(QStringLiteral("video_index")) == -1)) {
         VidAud.first = false;
     }
-    if (service.contains(QStringLiteral("avformat")) && getIntProperty(QStringLiteral("audio_index")) == -1) {
+    if (!audioTrack || (service.contains(QStringLiteral("avformat")) && getIntProperty(QStringLiteral("audio_index")) == -1)) {
         VidAud.second = false;
     }
     return stateFromBool(VidAud);
@@ -223,6 +243,7 @@ PlaylistState::ClipState inferState(std::shared_ptr<Mlt::Producer> prod)
 bool constructTrackFromMelt(const std::shared_ptr<TimelineItemModel> &timeline, int tid, Mlt::Playlist &track,
                             const std::unordered_map<QString, QString> &binIdCorresp, Fun &undo, Fun &redo)
 {
+    bool audioTrack = track.get_int("kdenlive:audio_track") == 1;
     for (int i = 0; i < track.count(); i++) {
         if (track.is_blank(i)) {
             continue;
@@ -249,16 +270,19 @@ bool constructTrackFromMelt(const std::shared_ptr<TimelineItemModel> &timeline, 
                 binId = binIdCorresp.at(clipId);
             }
             bool ok = false;
+            int cid = -1;
             if (pCore->bin()->getBinClip(binId)) {
-                PlaylistState::ClipState st = inferState(clip);
-                int cid = ClipModel::construct(timeline, binId, clip, st);
+                PlaylistState::ClipState st = inferState(clip, audioTrack);
+                cid = ClipModel::construct(timeline, binId, clip, st);
                 ok = timeline->requestClipMove(cid, tid, position, true, false, undo, redo);
             } else {
                 qDebug() << "// Cannot find bin clip: " << binId << " - " << clip->get("id");
             }
-            if (!ok) {
+            if (!ok && cid > -1) {
                 qDebug() << "ERROR : failed to insert clip in track" << tid << "position" << position;
-                return false;
+                timeline->requestItemDeletion(cid, false);
+                m_errorMessage.append(i18n("Invalid clip found on track %1 at %2.\n", track.get("id"), position));
+                break;
             }
             qDebug() << "Inserted clip in track" << tid << "at " << position;
 

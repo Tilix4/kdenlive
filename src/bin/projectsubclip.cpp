@@ -33,9 +33,9 @@ ProjectSubClip::ProjectSubClip(const QString &id, const std::shared_ptr<ProjectC
                                const QString &timecode, const QString &name)
     : AbstractProjectItem(AbstractProjectItem::SubClipItem, id, model)
     , m_masterClip(parent)
-    , m_in(in)
     , m_out(out)
 {
+    m_inPoint = in;
     m_duration = timecode;
     QPixmap pix(64, 36);
     pix.fill(Qt::lightGray);
@@ -66,7 +66,7 @@ ProjectSubClip::~ProjectSubClip()
 
 void ProjectSubClip::gotThumb(int pos, const QImage &img)
 {
-    if (pos == m_in) {
+    if (pos == m_inPoint) {
         setThumbnail(img);
         disconnect(m_masterClip.get(), &ProjectClip::thumbReady, this, &ProjectSubClip::gotThumb);
     }
@@ -96,9 +96,7 @@ std::shared_ptr<ProjectFolder> ProjectSubClip::folder(const QString &id)
     return std::shared_ptr<ProjectFolder>();
 }
 
-void ProjectSubClip::setBinEffectsEnabled(bool)
-{
-}
+void ProjectSubClip::setBinEffectsEnabled(bool) {}
 
 GenTime ProjectSubClip::duration() const
 {
@@ -108,7 +106,7 @@ GenTime ProjectSubClip::duration() const
 
 QPoint ProjectSubClip::zone() const
 {
-    return QPoint(m_in, m_out);
+    return QPoint(m_inPoint, m_out);
 }
 
 std::shared_ptr<ProjectClip> ProjectSubClip::clipAt(int ix)
@@ -121,14 +119,14 @@ QDomElement ProjectSubClip::toXml(QDomDocument &document, bool)
 {
     QDomElement sub = document.createElement(QStringLiteral("subclip"));
     sub.setAttribute(QStringLiteral("id"), m_masterClip->AbstractProjectItem::clipId());
-    sub.setAttribute(QStringLiteral("in"), m_in);
+    sub.setAttribute(QStringLiteral("in"), m_inPoint);
     sub.setAttribute(QStringLiteral("out"), m_out);
     return sub;
 }
 
 std::shared_ptr<ProjectSubClip> ProjectSubClip::subClip(int in, int out)
 {
-    if (m_in == in && m_out == out) {
+    if (m_inPoint == in && m_out == out) {
         return std::static_pointer_cast<ProjectSubClip>(shared_from_this());
     }
     return std::shared_ptr<ProjectSubClip>();
@@ -138,7 +136,9 @@ void ProjectSubClip::setThumbnail(const QImage &img)
 {
     QPixmap thumb = roundedPixmap(QPixmap::fromImage(img));
     m_thumbnail = QIcon(thumb);
-    if (auto ptr = m_model.lock()) std::static_pointer_cast<ProjectItemModel>(ptr)->onItemUpdated(std::static_pointer_cast<ProjectSubClip>(shared_from_this()), AbstractProjectItem::DataThumbnail);
+    if (auto ptr = m_model.lock())
+        std::static_pointer_cast<ProjectItemModel>(ptr)->onItemUpdated(std::static_pointer_cast<ProjectSubClip>(shared_from_this()),
+                                                                       AbstractProjectItem::DataThumbnail);
 }
 
 QPixmap ProjectSubClip::thumbnail(int width, int height)

@@ -33,6 +33,7 @@ TEST_CASE("Effects stack", "[Effects]")
     REQUIRE(!effects.isEmpty());
 
     anEffect = effects.first().first;
+    //qDebug()<<"// APPENDING EFFECT: "<<anEffect;
 
     REQUIRE(!anEffect.isEmpty());
 

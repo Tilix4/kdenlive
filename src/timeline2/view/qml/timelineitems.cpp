@@ -23,6 +23,7 @@ public:
         painter->setPen(Qt::white);
         painter->drawLine(width(), 0, 0, height());
     }
+
 private:
     QColor m_color;
 };
@@ -58,7 +59,7 @@ public:
         setEnabled(false);
         setRenderTarget(QQuickPaintedItem::FramebufferObject);
         setMipmap(true);
-        setTextureSize(QSize(width(),height()));
+        setTextureSize(QSize(width(), height()));
         connect(this, SIGNAL(propertyChanged()), this, SLOT(update()));
         // Fill gradient
         m_gradient.setStart(0, 0);
@@ -90,7 +91,7 @@ public:
             path.moveTo(-1, height());
             int i = 0;
             int lastIdx = -1;
-            for (; i < width(); ++i) {
+            for (; i <= width(); ++i) {
                 int idx = m_inPoint + int(i * indicesPrPixel);
                 if (lastIdx == idx) {
                     continue;
@@ -120,7 +121,7 @@ public:
                 // Draw channel median line
                 painter->drawLine(0, y, width(), y);
                 int lastIdx = -1;
-                for (i = 0; i < width(); ++i) {
+                for (i = 0; i <= width(); ++i) {
                     int idx = m_inPoint + int(i * indicesPrPixel);
                     if (lastIdx == idx) {
                         continue;

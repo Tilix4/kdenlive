@@ -27,20 +27,27 @@
 /* @brief This class represents an effect hierarchy to be displayed as a tree
  */
 class TreeItem;
+class QMenu;
+class KActionCategory;
+
 class AssetTreeModel : public AbstractTreeModel
 {
 
 public:
     explicit AssetTreeModel(QObject *parent = 0);
 
-    enum { IdRole = Qt::UserRole + 1, NameRole };
+    enum { IdRole = Qt::UserRole + 1, NameRole, FavoriteRole };
 
     // Helper function to retrieve name
     QString getName(const QModelIndex &index) const;
     // Helper function to retrieve description
     QString getDescription(const QModelIndex &index) const;
+    // Helper function to retrieve if an effect is categorized as favorite
+    bool isFavorite(const QModelIndex &index) const;
+    void setFavorite(const QModelIndex &index, bool favorite);
     QHash<int, QByteArray> roleNames() const override;
     QVariant data(const QModelIndex &index, int role) const override;
+    virtual void reloadAssetMenu(QMenu *effectsMenu, KActionCategory *effectActions) = 0;
 
     // for convenience, we store the column of each data field
     static int nameCol, idCol, favCol, typeCol;

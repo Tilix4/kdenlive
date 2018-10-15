@@ -135,6 +135,7 @@ private:
     QAction *m_buttonCursor;
     QAction *m_buttonSave;
     QAction *m_buttonLoad;
+    QAction *m_buttonDownload;
 
     QAction *m_unicodeAction;
     QAction *m_zUp;
@@ -147,6 +148,7 @@ private:
     QAction *m_selectImages;
     QAction *m_unselectAll;
     QString lastDocumentHash;
+    QList <QGraphicsLineItem*> m_guides;
 
     // See http://doc.trolltech.com/4.5/signalsandslots.html#advanced-signals-and-slots-usage.
     QSignalMapper *m_signalMapper;
@@ -205,6 +207,9 @@ private:
     /** @brief Removes the "start" and "end" info text from animation viewports. */
     void deleteAnimInfoText();
 
+    /** @brief Refreshes the contents of combobox based on list of title templates. */
+    void refreshTemplateBoxContents();
+
     qreal maxZIndex();
 
     /** @brief Gets the minimum/maximum Z index of items.
@@ -219,9 +224,13 @@ private:
     void selectItems(int itemType);
 
     /** @brief Appends the shortcut of a QAction to a tooltip text */
-    QString getTooltipWithShortcut(const QString& tipText, QAction* button);
+    QString getTooltipWithShortcut(const QString &tipText, QAction *button);
     void loadGradients();
     void storeGradient(const QString &gradientData);
+
+    /** Open title download dialog */
+    void downloadTitleTemplates();
+    int getNewStuff(const QString &configFile);
 
 public slots:
     void slotNewText(MyTextItem *tt);
@@ -306,7 +315,7 @@ private slots:
     /** Called whenever text properties change (font e.g.) */
     void slotUpdateText();
     void slotInsertUnicode();
-    void slotInsertUnicodeString(const QString& string);
+    void slotInsertUnicodeString(const QString &string);
 
     void displayBackgroundFrame();
 
@@ -330,6 +339,12 @@ private slots:
     void slotResize50();
     void slotResize100();
     void slotResize200();
+    /** @brief Show hide guides */
+    void showGuides(int state);
+    /** @brief Build guides */
+    void updateGuides(int);
+    /** @brief guide color changed, repaint */
+    void guideColorChanged(const QColor &col);
 
     /** @brief Called when accepted, stores user selections for next time use.
      * @ref writeChoices */

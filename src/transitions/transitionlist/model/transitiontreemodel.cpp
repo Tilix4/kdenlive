@@ -21,9 +21,12 @@
 
 #include "transitiontreemodel.hpp"
 #include "abstractmodel/treeitem.hpp"
+#include "kdenlivesettings.h"
 #include "transitions/transitionsrepository.hpp"
 #include <KLocalizedString>
 
+#include <KActionCategory>
+#include <QMenu>
 #include <QDebug>
 
 TransitionTreeModel::TransitionTreeModel(QObject *parent)
@@ -50,6 +53,10 @@ std::shared_ptr<TransitionTreeModel> TransitionTreeModel::construct(bool flat, Q
     // We parse transitions
     auto allTransitions = TransitionsRepository::get()->getNames();
     for (const auto &transition : allTransitions) {
+        if (!KdenliveSettings::gpu_accel() && transition.first.contains(QLatin1String("movit."))) {
+            // Hide GPU compositions when movit disabled
+            continue;
+        }
         std::shared_ptr<TreeItem> targetCategory = compoCategory;
         TransitionType type = TransitionsRepository::get()->getType(transition.first);
         if (type == TransitionType::AudioTransition || type == TransitionType::VideoTransition) {
@@ -61,11 +68,30 @@ std::shared_ptr<TransitionTreeModel> TransitionTreeModel::construct(bool flat, Q
 
         // we create the data list corresponding to this transition
         QList<QVariant> data;
-        bool isFav = TransitionsRepository::get()->isFavorite(transition.first);
+        bool isFav = KdenliveSettings::favorite_transitions().contains(transition.first);
         qDebug() << transition.second << transition.first << "in " << targetCategory->dataColumn(0).toString();
         data << transition.second << transition.first << QVariant::fromValue(type) << isFav;
 
         targetCategory->appendChild(data);
     }
     return self;
+}
+
+void TransitionTreeModel::reloadAssetMenu(QMenu *effectsMenu, KActionCategory *effectActions)
+{
+    for (int i = 0; i < rowCount(); i++) {
+        std::shared_ptr<TreeItem> item = rootItem->child(i);
+        if (item->childCount() > 0) {
+            QMenu *catMenu = new QMenu(item->dataColumn(nameCol).toString(), effectsMenu);
+            effectsMenu->addMenu(catMenu);
+            for (int j = 0; j < item->childCount(); j++) {
+                std::shared_ptr<TreeItem> child = item->child(j);
+                QAction *a = new QAction(child->dataColumn(nameCol).toString(), catMenu);
+                const QString id = child->dataColumn(idCol).toString();
+                a->setData(id);
+                catMenu->addAction(a);
+                effectActions->addAction("transition_" + id, a);
+            }
+        }
+    }
 }

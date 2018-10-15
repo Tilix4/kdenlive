@@ -29,6 +29,7 @@
 #include "definitions.h"
 
 class KSqueezedTextLabel;
+class KDualAction;
 class QToolButton;
 
 /** @brief This class is the widget that provides interaction with the asset currently selected.
@@ -62,6 +63,8 @@ public:
     void updatePalette();
     /* @brief Returns the object type / id of effectstack owner */
     ObjectId effectStackOwner();
+    /* @brief Add an effect to the current stack owner */
+    void addEffect(const QString &effectId);
 
 public slots:
     /** @brief Clear panel if displaying itemId */
@@ -79,19 +82,23 @@ protected:
 
 private:
     QToolButton *m_switchBuiltStack;
-    QToolButton *m_splitButton;
-    QToolButton *m_timelineButton;
+    KDualAction *m_splitButton;
+    KDualAction *m_enableStackButton;
+    KDualAction *m_timelineButton;
 
 private slots:
     void processSplitEffect(bool enable);
     /** Displays the owner clip keyframes in timeline */
     void showKeyframes(bool enable);
+    /** Enable / disable effect stack */
+    void enableStack(bool enable);
 
 signals:
     void doSplitEffect(bool);
     void doSplitBinEffect(bool);
     void seekToPos(int);
     void changeSpeed(int);
+    void reloadEffect(const QString &path);
 };
 
 #endif

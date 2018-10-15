@@ -52,7 +52,7 @@ TEST_CASE("Regression")
     REQUIRE(timeline->getTrackById(1)->checkConsistency());
     undoStack->redo();
     REQUIRE(timeline->getTrackById(1)->checkConsistency());
-    REQUIRE_FALSE(timeline->requestItemResize(0, 0, false));
+    REQUIRE(timeline->requestItemResize(0, 0, false) == -1);
     REQUIRE(timeline->getTrackById(1)->checkConsistency());
     TrackModel::construct(timeline);
     REQUIRE(timeline->getTrackById(1)->checkConsistency());
@@ -62,6 +62,8 @@ TEST_CASE("Regression")
     REQUIRE(timeline->getTrackById(2)->checkConsistency());
     undoStack->redo();
     REQUIRE(timeline->getTrackById(1)->checkConsistency());
+    binModel->clean();
+    pCore->m_projectManager = nullptr;
 }
 
 TEST_CASE("Regression2")
@@ -133,8 +135,7 @@ TEST_CASE("Regression2")
     REQUIRE(timeline->getTrackById(0)->checkConsistency());
     REQUIRE(timeline->getTrackById(2)->checkConsistency());
     {
-        bool ok = timeline->requestItemResize(3, 0, false);
-        REQUIRE_FALSE(ok);
+        REQUIRE(timeline->requestItemResize(3, 0, false) == -1);
     }
     REQUIRE(timeline->getTrackById(0)->checkConsistency());
     REQUIRE(timeline->getTrackById(2)->checkConsistency());
@@ -156,8 +157,7 @@ TEST_CASE("Regression2")
     REQUIRE(timeline->getTrackById(4)->checkConsistency());
     REQUIRE(timeline->getTrackById(6)->checkConsistency());
     {
-        bool ok = timeline->requestItemResize(3, 15, true);
-        REQUIRE(ok);
+        REQUIRE(timeline->requestItemResize(3, 15, true) > -1);
     }
     REQUIRE(timeline->getTrackById(0)->checkConsistency());
     REQUIRE(timeline->getTrackById(2)->checkConsistency());
@@ -172,16 +172,14 @@ TEST_CASE("Regression2")
     REQUIRE(timeline->getTrackById(4)->checkConsistency());
     REQUIRE(timeline->getTrackById(6)->checkConsistency());
     {
-        bool ok = timeline->requestItemResize(3, 16, false);
-        REQUIRE_FALSE(ok);
+        REQUIRE(timeline->requestItemResize(3, 16, false) == -1);
     }
     REQUIRE(timeline->getTrackById(0)->checkConsistency());
     REQUIRE(timeline->getTrackById(2)->checkConsistency());
     REQUIRE(timeline->getTrackById(4)->checkConsistency());
     REQUIRE(timeline->getTrackById(6)->checkConsistency());
     {
-        bool ok = timeline->requestItemResize(3, 16, true);
-        REQUIRE(ok);
+        REQUIRE(timeline->requestItemResize(3, 16, true) > -1);
     }
     REQUIRE(timeline->getTrackById(0)->checkConsistency());
     REQUIRE(timeline->getTrackById(2)->checkConsistency());
@@ -217,6 +215,8 @@ TEST_CASE("Regression2")
     REQUIRE(timeline->getTrackById(4)->checkConsistency());
     REQUIRE(timeline->getTrackById(6)->checkConsistency());
     undoStack->redo();
+    binModel->clean();
+    pCore->m_projectManager = nullptr;
 }
 
 /*

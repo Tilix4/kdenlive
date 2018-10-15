@@ -35,7 +35,7 @@
  * Note that this class is a Singleton
  */
 
-enum class EffectType { Video, Audio, Custom };
+enum class EffectType { Video, Audio, Custom, Favorites, Hidden};
 Q_DECLARE_METATYPE(EffectType)
 
 class EffectsRepository : public AbstractAssetsRepository<EffectType>
@@ -47,6 +47,8 @@ public:
 
     /* @brief returns a fresh instance of the given effect */
     Mlt::Filter *getEffect(const QString &effectId) const;
+    void setFavorite(const QString &id, bool favorite) override;
+    QPair <QString, QString> reloadCustom(const QString &path);
 
 protected:
     // Constructor is protected because class is a Singleton
@@ -54,6 +56,9 @@ protected:
 
     /* Retrieves the list of all available effects from Mlt*/
     Mlt::Properties *retrieveListFromMlt() override;
+
+    /* Retrieves the list of favorite effects */
+    void parseFavorites() override;
 
     /* @brief Retrieves additional info about effects from a custom XML file
        The resulting assets are stored in customAssets

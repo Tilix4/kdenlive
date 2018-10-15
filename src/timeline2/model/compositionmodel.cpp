@@ -28,10 +28,12 @@
 #include <mlt++/MltTransition.h>
 #include <utility>
 
-CompositionModel::CompositionModel(std::weak_ptr<TimelineModel> parent, Mlt::Transition *transition, int id, const QDomElement &transitionXml, const QString &transitionId)
+CompositionModel::CompositionModel(std::weak_ptr<TimelineModel> parent, Mlt::Transition *transition, int id, const QDomElement &transitionXml,
+                                   const QString &transitionId)
     : MoveableItem<Mlt::Transition>(std::move(parent), id)
     , AssetParameterModel(transition, transitionXml, transitionId, {ObjectType::TimelineComposition, m_id})
     , a_track(-1)
+    , m_duration(0)
 {
     m_compositionName = TransitionsRepository::get()->getName(transitionId);
 }
@@ -41,12 +43,21 @@ int CompositionModel::construct(const std::weak_ptr<TimelineModel> &parent, cons
     Mlt::Transition *transition = TransitionsRepository::get()->getTransition(transitionId);
     transition->set_in_and_out(0, 0);
     auto xml = TransitionsRepository::get()->getXml(transitionId);
+    if (sourceProperties) {
+        // Paste parameters from existing source composition
+        QDomNodeList params = xml.elementsByTagName(QStringLiteral("parameter"));
+        for (int i = 0; i < params.count(); ++i) {
+            QDomElement currentParameter = params.item(i).toElement();
+            QString paramName = currentParameter.attribute(QStringLiteral("name"));
+            QString paramValue = sourceProperties->get(paramName.toUtf8().constData());
+            if (!paramValue.isEmpty()) {
+                currentParameter.setAttribute(QStringLiteral("value"), paramValue);
+            }
+        }
+    }
     std::shared_ptr<CompositionModel> composition(new CompositionModel(parent, transition, id, xml, transitionId));
     id = composition->m_id;
-    if (sourceProperties != nullptr) {
-        Mlt::Properties transProps(composition->service()->get_properties());
-        transProps.inherit(*sourceProperties);
-    }
+
     if (auto ptr = parent.lock()) {
         ptr->registerComposition(composition);
     } else {
@@ -64,9 +75,10 @@ bool CompositionModel::requestResize(int size, bool right, Fun &undo, Fun &redo,
         return false;
     }
     int delta = getPlaytime() - size;
-    qDebug() << "compo request resize " << size << right << delta;
+    qDebug() << "compo request resize to " << size <<", ACTUAL SZ: "<<getPlaytime()<<", "<< right << delta;
     int in = getIn();
-    int out = getOut();
+    int out = in + getPlaytime() - 1;
+    int oldDuration = out - in;
     int old_in = in, old_out = out;
     if (right) {
         out -= delta;
@@ -88,6 +100,9 @@ bool CompositionModel::requestResize(int size, bool right, Fun &undo, Fun &redo,
             qDebug() << "Error : Moving composition failed because parent timeline is not available anymore";
             Q_ASSERT(false);
         }
+    } else {
+        // Perform resize only
+        setInOut(in, out);
     }
     Fun operation = [in, out, track_operation, this]() {
         if (track_operation()) {
@@ -98,7 +113,15 @@ bool CompositionModel::requestResize(int size, bool right, Fun &undo, Fun &redo,
     if (operation()) {
         // Now, we are in the state in which the timeline should be when we try to revert current action. So we can build the reverse action from here
         auto ptr = m_parent.lock();
+        // we send a list of roles to be updated
+         QVector<int> roles{TimelineModel::DurationRole};
+        if (!right) {
+            roles.push_back(TimelineModel::StartRole);
+        }
         if (m_currentTrackId != -1 && ptr) {
+            QModelIndex ix = ptr->makeCompositionIndexFromID(m_id);
+            //TODO: integrate in undo
+            ptr->dataChanged(ix, ix, roles);
             track_reverse = ptr->getTrackById(m_currentTrackId)->requestCompositionResize_lambda(m_id, old_in, old_out);
         }
         Fun reverse = [old_in, old_out, track_reverse, this]() {
@@ -107,6 +130,18 @@ bool CompositionModel::requestResize(int size, bool right, Fun &undo, Fun &redo,
             }
             return false;
         };
+
+        auto kfr = getKeyframeModel();
+        if (kfr) {
+            // Adjust keyframe length
+            kfr->resizeKeyframes(0, oldDuration, 0, out, undo, redo);
+            Fun refresh = [kfr, this]() {
+                kfr->modelChanged();
+                return true;
+            };
+            refresh();
+            UPDATE_UNDO_REDO(refresh, refresh, undo, redo);
+        }
         UPDATE_UNDO_REDO(operation, reverse, undo, redo);
         return true;
     }
@@ -134,7 +169,7 @@ Mlt::Properties *CompositionModel::properties()
 int CompositionModel::getPlaytime() const
 {
     READ_LOCK();
-    return getOut() - getIn() + 1;
+    return m_duration + 1;
 }
 
 int CompositionModel::getATrack() const
@@ -163,7 +198,9 @@ void CompositionModel::setATrack(int trackMltPosition, int trackId)
     if (a_track >= 0) {
         service()->set("a_track", trackMltPosition);
     }
-    emit compositionTrackChanged();
+    if (m_currentTrackId != -1) {
+        emit compositionTrackChanged();
+    }
 }
 
 KeyframeModel *CompositionModel::getEffectKeyframeModel()
@@ -193,6 +230,22 @@ const QString &CompositionModel::displayName() const
 
 void CompositionModel::setInOut(int in, int out)
 {
-    m_position = in;
     MoveableItem::setInOut(in, out);
+    m_duration = out - in;
+    setPosition(in);
+}
+
+void CompositionModel::setCurrentTrackId(int tid)
+{
+    MoveableItem::setCurrentTrackId(tid);
+}
+
+int CompositionModel::getOut() const
+{
+    return getPosition() + m_duration;
+}
+
+int CompositionModel::getIn() const
+{
+    return getPosition();
 }

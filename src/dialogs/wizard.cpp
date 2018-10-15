@@ -22,7 +22,7 @@
 #include "profiles/profilemodel.hpp"
 #include "profiles/profilerepository.hpp"
 #include "profilesdialog.h"
-#include "utils/KoIconUtils.h"
+
 #include "utils/thememanager.h"
 #ifdef USE_V4L
 #include "capture/v4lcapture.h"
@@ -46,6 +46,9 @@
 #include <QStandardPaths>
 #include <QTimer>
 #include <QXmlStreamWriter>
+#include <QTemporaryFile>
+#include <QCheckBox>
+#include <QPushButton>
 
 // Recommended MLT version
 const int mltVersionMajor = MLT_MIN_MAJOR_VERSION;
@@ -73,13 +76,11 @@ bool MyWizardPage::isComplete() const
     return m_isComplete;
 }
 
-Wizard::Wizard(bool autoClose, QWidget *parent)
+Wizard::Wizard(bool autoClose, bool appImageCheck, QWidget *parent)
     : QWizard(parent)
     , m_systemCheckIsOk(false)
     , m_brokenModule(false)
 {
-    // Check color theme
-    ThemeManager::instance()->initDarkTheme();
     setWindowTitle(i18n("Welcome to Kdenlive"));
     int logoHeight = fontMetrics().height() * 2.5;
     setWizardStyle(QWizard::ModernStyle);
@@ -88,7 +89,7 @@ Wizard::Wizard(bool autoClose, QWidget *parent)
     m_page = new MyWizardPage(this);
     m_page->setTitle(i18n("Welcome to Kdenlive %1", QString(kdenlive_version)));
     m_page->setSubTitle(i18n("Using MLT %1", mlt_version_get_string()));
-    setPixmap(QWizard::LogoPixmap, KoIconUtils::themedIcon(QStringLiteral(":/pics/kdenlive.png")).pixmap(logoHeight, logoHeight));
+    setPixmap(QWizard::LogoPixmap, QIcon::fromTheme(QStringLiteral(":/pics/kdenlive.png")).pixmap(logoHeight, logoHeight));
     m_startLayout = new QVBoxLayout;
     m_errorWidget = new KMessageWidget(this);
     m_startLayout->addWidget(m_errorWidget);
@@ -104,7 +105,11 @@ Wizard::Wizard(bool autoClose, QWidget *parent)
     setButtonText(QWizard::FinishButton, i18n("OK"));
 
     slotCheckMlt();
-    if (!m_errors.isEmpty() || !m_warnings.isEmpty() || !m_infos.isEmpty()) {
+    if (autoClose) {
+        // This is a first run instance, check HW encoders
+        testHwEncoders();
+    }
+    if (!m_errors.isEmpty() || !m_warnings.isEmpty() || (!m_infos.isEmpty() && !appImageCheck)) {
         QLabel *lab = new QLabel(this);
         lab->setText(i18n("Startup error or warning, check our <a href='#'>online manual</a>."));
         connect(lab, &QLabel::linkActivated, this, &Wizard::slotOpenManual);
@@ -121,6 +126,23 @@ Wizard::Wizard(bool autoClose, QWidget *parent)
         lab->setMessageType(KMessageWidget::Positive);
         lab->setCloseButtonVisible(false);
         m_startLayout->addWidget(lab);
+        // HW accel
+        QCheckBox *cb = new QCheckBox(i18n("VAAPI hardware acceleration"), this);
+        m_startLayout->addWidget(cb);
+        cb->setChecked(KdenliveSettings::vaapiEnabled());
+        QCheckBox *cbn = new QCheckBox(i18n("NVIDIA hardware acceleration"), this);
+        m_startLayout->addWidget(cbn);
+        cbn->setChecked(KdenliveSettings::nvencEnabled());
+        QPushButton *pb = new QPushButton(i18n("Check hardware acceleration"), this);
+        connect(pb, &QPushButton::clicked, [&, cb, cbn, pb]() {
+            testHwEncoders();
+            pb->setEnabled(false);
+            cb->setChecked(KdenliveSettings::vaapiEnabled());
+            cbn->setChecked(KdenliveSettings::nvencEnabled());
+            updateHwStatus();
+            pb->setEnabled(true);
+        });
+        m_startLayout->addWidget(pb);
         setOption(QWizard::NoCancelButton, true);
         return;
     }
@@ -160,63 +182,63 @@ Wizard::Wizard(bool autoClose, QWidget *parent)
         m_startLayout->addWidget(errorLabel);
         errorLabel->show();
     }
-// build profiles lists
-/*QMap<QString, QString> profilesInfo = ProfilesDialog::getProfilesInfo();
-QMap<QString, QString>::const_iterator i = profilesInfo.constBegin();
-while (i != profilesInfo.constEnd()) {
-    QMap< QString, QString > profileData = ProfilesDialog::getSettingsFromFile(i.key());
-    if (profileData.value(QStringLiteral("width")) == QLatin1String("720")) m_dvProfiles.insert(i.value(), i.key());
-    else if (profileData.value(QStringLiteral("width")).toInt() >= 1080) m_hdvProfiles.insert(i.value(), i.key());
-    else m_otherProfiles.insert(i.value(), i.key());
-    ++i;
-}
-
-m_standard.button_all->setChecked(true);
-connect(m_standard.button_all, SIGNAL(toggled(bool)), this, SLOT(slotCheckStandard()));
-connect(m_standard.button_hdv, SIGNAL(toggled(bool)), this, SLOT(slotCheckStandard()));
-connect(m_standard.button_dv, SIGNAL(toggled(bool)), this, SLOT(slotCheckStandard()));
-slotCheckStandard();
-connect(m_standard.profiles_list, SIGNAL(itemSelectionChanged()), this, SLOT(slotCheckSelectedItem()));
-
-// select default profile
-if (!KdenliveSettings::default_profile().isEmpty()) {
-    for (int i = 0; i < m_standard.profiles_list->count(); ++i) {
-        if (m_standard.profiles_list->item(i)->data(Qt::UserRole).toString() == KdenliveSettings::default_profile()) {
-            m_standard.profiles_list->setCurrentRow(i);
-            m_standard.profiles_list->scrollToItem(m_standard.profiles_list->currentItem());
-            break;
+        // build profiles lists
+        /*QMap<QString, QString> profilesInfo = ProfilesDialog::getProfilesInfo();
+        QMap<QString, QString>::const_iterator i = profilesInfo.constBegin();
+        while (i != profilesInfo.constEnd()) {
+            QMap< QString, QString > profileData = ProfilesDialog::getSettingsFromFile(i.key());
+            if (profileData.value(QStringLiteral("width")) == QLatin1String("720")) m_dvProfiles.insert(i.value(), i.key());
+            else if (profileData.value(QStringLiteral("width")).toInt() >= 1080) m_hdvProfiles.insert(i.value(), i.key());
+            else m_otherProfiles.insert(i.value(), i.key());
+            ++i;
         }
-    }
-}
 
-setPage(2, page2);
+        m_standard.button_all->setChecked(true);
+        connect(m_standard.button_all, SIGNAL(toggled(bool)), this, SLOT(slotCheckStandard()));
+        connect(m_standard.button_hdv, SIGNAL(toggled(bool)), this, SLOT(slotCheckStandard()));
+        connect(m_standard.button_dv, SIGNAL(toggled(bool)), this, SLOT(slotCheckStandard()));
+        slotCheckStandard();
+        connect(m_standard.profiles_list, SIGNAL(itemSelectionChanged()), this, SLOT(slotCheckSelectedItem()));
 
-QWizardPage *page3 = new QWizardPage;
-page3->setTitle(i18n("Additional Settings"));
-m_extra.setupUi(page3);
-m_extra.projectfolder->setMode(KFile::Directory);
-m_extra.projectfolder->setUrl(QUrl(KdenliveSettings::defaultprojectfolder()));
-m_extra.videothumbs->setChecked(KdenliveSettings::videothumbnails());
-m_extra.audiothumbs->setChecked(KdenliveSettings::audiothumbnails());
-m_extra.autosave->setChecked(KdenliveSettings::crashrecovery());
-connect(m_extra.videothumbs, SIGNAL(stateChanged(int)), this, SLOT(slotCheckThumbs()));
-connect(m_extra.audiothumbs, SIGNAL(stateChanged(int)), this, SLOT(slotCheckThumbs()));
-slotCheckThumbs();
-addPage(page3);*/
+        // select default profile
+        if (!KdenliveSettings::default_profile().isEmpty()) {
+            for (int i = 0; i < m_standard.profiles_list->count(); ++i) {
+                if (m_standard.profiles_list->item(i)->data(Qt::UserRole).toString() == KdenliveSettings::default_profile()) {
+                    m_standard.profiles_list->setCurrentRow(i);
+                    m_standard.profiles_list->scrollToItem(m_standard.profiles_list->currentItem());
+                    break;
+                }
+            }
+        }
+
+        setPage(2, page2);
+
+        QWizardPage *page3 = new QWizardPage;
+        page3->setTitle(i18n("Additional Settings"));
+        m_extra.setupUi(page3);
+        m_extra.projectfolder->setMode(KFile::Directory);
+        m_extra.projectfolder->setUrl(QUrl(KdenliveSettings::defaultprojectfolder()));
+        m_extra.videothumbs->setChecked(KdenliveSettings::videothumbnails());
+        m_extra.audiothumbs->setChecked(KdenliveSettings::audiothumbnails());
+        m_extra.autosave->setChecked(KdenliveSettings::crashrecovery());
+        connect(m_extra.videothumbs, SIGNAL(stateChanged(int)), this, SLOT(slotCheckThumbs()));
+        connect(m_extra.audiothumbs, SIGNAL(stateChanged(int)), this, SLOT(slotCheckThumbs()));
+        slotCheckThumbs();
+        addPage(page3);*/
 
 #ifndef Q_WS_MAC
-/*QWizardPage *page6 = new QWizardPage;
-page6->setTitle(i18n("Capture device"));
-m_capture.setupUi(page6);
-bool found_decklink = Render::getBlackMagicDeviceList(m_capture.decklink_devices);
-KdenliveSettings::setDecklink_device_found(found_decklink);
-if (found_decklink) m_capture.decklink_status->setText(i18n("Default Blackmagic Decklink card:"));
-else m_capture.decklink_status->setText(i18n("No Blackmagic Decklink device found"));
-connect(m_capture.decklink_devices, SIGNAL(currentIndexChanged(int)), this, SLOT(slotUpdateDecklinkDevice(int)));
-connect(m_capture.button_reload, SIGNAL(clicked()), this, SLOT(slotDetectWebcam()));
-connect(m_capture.v4l_devices, SIGNAL(currentIndexChanged(int)), this, SLOT(slotUpdateCaptureParameters()));
-connect(m_capture.v4l_formats, SIGNAL(currentIndexChanged(int)), this, SLOT(slotSaveCaptureFormat()));
-m_capture.button_reload->setIcon(QIcon::fromTheme(QStringLiteral("view-refresh")));*/
+        /*QWizardPage *page6 = new QWizardPage;
+        page6->setTitle(i18n("Capture device"));
+        m_capture.setupUi(page6);
+        bool found_decklink = Render::getBlackMagicDeviceList(m_capture.decklink_devices);
+        KdenliveSettings::setDecklink_device_found(found_decklink);
+        if (found_decklink) m_capture.decklink_status->setText(i18n("Default Blackmagic Decklink card:"));
+        else m_capture.decklink_status->setText(i18n("No Blackmagic Decklink device found"));
+        connect(m_capture.decklink_devices, SIGNAL(currentIndexChanged(int)), this, SLOT(slotUpdateDecklinkDevice(int)));
+        connect(m_capture.button_reload, SIGNAL(clicked()), this, SLOT(slotDetectWebcam()));
+        connect(m_capture.v4l_devices, SIGNAL(currentIndexChanged(int)), this, SLOT(slotUpdateCaptureParameters()));
+        connect(m_capture.v4l_formats, SIGNAL(currentIndexChanged(int)), this, SLOT(slotSaveCaptureFormat()));
+        m_capture.button_reload->setIcon(QIcon::fromTheme(QStringLiteral("view-refresh")));*/
 
 #endif
 
@@ -306,10 +328,9 @@ void Wizard::slotUpdateCaptureParameters()
                 QString formatDescription =
                     QLatin1Char('[') + format + QStringLiteral("] ") + itemSize + QStringLiteral(" (") + itemRates.at(k) + QLatin1Char(')');
                 if (m_capture.v4l_formats->findText(formatDescription) == -1) {
-                    m_capture.v4l_formats->addItem(formatDescription,
-                                                   QStringList()
-                                                       << format << itemSize.section('x', 0, 0) << itemSize.section('x', 1, 1)
-                                                       << itemRates.at(k).section(QLatin1Char('/'), 0, 0) << itemRates.at(k).section(QLatin1Char('/'), 1, 1));
+                    m_capture.v4l_formats->addItem(formatDescription, QStringList() << format << itemSize.section('x', 0, 0) << itemSize.section('x', 1, 1)
+                                                                                    << itemRates.at(k).section(QLatin1Char('/'), 0, 0)
+                                                                                    << itemRates.at(k).section(QLatin1Char('/'), 1, 1));
                 }
             }
         }
@@ -771,8 +792,13 @@ void Wizard::slotCheckStandard()
         QListWidgetItem *item = m_standard.profiles_list->item(i);
 
         std::unique_ptr<ProfileModel> &curProfile = ProfileRepository::get()->getProfile(item->data(Qt::UserRole).toString());
-        const QString infoString = QStringLiteral("<strong>") + i18n("Frame size:") + QStringLiteral(" </strong>%1x%2<br /><strong>").arg(curProfile->width()).arg(curProfile->height()) + i18n("Frame rate:") + QStringLiteral(" </strong>%1/%2<br /><strong>").arg(curProfile->frame_rate_num()).arg(curProfile->frame_rate_den()) + i18n("Pixel aspect ratio:") + QStringLiteral("</strong>%1/%2<br /><strong>").arg(curProfile->sample_aspect_num()).arg(curProfile->sample_aspect_den()) + i18n("Display aspect ratio:") + QStringLiteral(" </strong>%1/%2").arg(curProfile->display_aspect_num()).arg(curProfile->display_aspect_den());
-        
+        const QString infoString =
+            QStringLiteral("<strong>") + i18n("Frame size:") +
+            QStringLiteral(" </strong>%1x%2<br /><strong>").arg(curProfile->width()).arg(curProfile->height()) + i18n("Frame rate:") +
+            QStringLiteral(" </strong>%1/%2<br /><strong>").arg(curProfile->frame_rate_num()).arg(curProfile->frame_rate_den()) + i18n("Pixel aspect ratio:") +
+            QStringLiteral("</strong>%1/%2<br /><strong>").arg(curProfile->sample_aspect_num()).arg(curProfile->sample_aspect_den()) +
+            i18n("Display aspect ratio:") + QStringLiteral(" </strong>%1/%2").arg(curProfile->display_aspect_num()).arg(curProfile->display_aspect_den());
+
         /*const QString infoString = QStringLiteral("<strong>" + i18n("Frame size:") + QStringLiteral(" </strong>%1x%2<br /><strong>") + i18n("Frame rate:") +
                                     QStringLiteral(" </strong>%3/%4<br /><strong>") + i18n("Pixel aspect ratio:") +
                                     QStringLiteral("</strong>%5/%6<br /><strong>") + i18n("Display aspect ratio:") + QStringLiteral(" </strong>%7/%8"))
@@ -880,4 +906,85 @@ void Wizard::slotSaveCaptureFormat()
 void Wizard::slotUpdateDecklinkDevice(uint captureCard)
 {
     KdenliveSettings::setDecklink_capturedevice(captureCard);
+}
+
+
+void Wizard::testHwEncoders()
+{
+    QProcess hwEncoders;
+    // Testing vaapi support
+    QTemporaryFile tmp(QDir::tempPath() + "/XXXXXX.mp4");
+    if (!tmp.open()) {
+        // Something went wrong
+        return;
+    }
+    tmp.close();
+
+    // VAAPI testing
+    QStringList args{"-y","-vaapi_device","/dev/dri/renderD128","-f","lavfi","-i","smptebars=duration=5:size=1280x720:rate=25","-vf","format=nv12,hwupload","-c:v","h264_vaapi","-an","-f","mp4",tmp.fileName()};
+    qDebug()<<"// FFMPEG ARGS: "<<args;
+    hwEncoders.start(KdenliveSettings::ffmpegpath(), args);
+    bool vaapiSupported = false;
+    if (hwEncoders.waitForFinished()) {
+        if (hwEncoders.exitStatus() == QProcess::CrashExit) {
+            qDebug()<<"/// ++ VAAPI NOT SUPPORTED";
+        } else {
+            if (tmp.exists() && tmp.size() > 0) {
+                qDebug()<<"/// ++ VAAPI YES SUPPORTED ::::::";
+                // vaapi support enabled
+                vaapiSupported = true;
+            } else {
+                qDebug()<<"/// ++ VAAPI FAILED ::::::";
+                // vaapi support not enabled
+            }
+        }
+    }
+    KdenliveSettings::setVaapiEnabled(vaapiSupported);
+
+    // NVIDIA testing
+    QStringList args2{"-y","-hwaccel","cuvid","-f","lavfi","-i","smptebars=duration=5:size=1280x720:rate=25","-c:v","h264_nvenc","-an","-f","mp4",tmp.fileName()};
+    qDebug()<<"// FFMPEG ARGS: "<<args2;
+    hwEncoders.start(KdenliveSettings::ffmpegpath(), args2);
+    bool nvencSupported = false;
+    if (hwEncoders.waitForFinished()) {
+        if (hwEncoders.exitStatus() == QProcess::CrashExit) {
+            qDebug()<<"/// ++ VAAPI NOT SUPPORTED";
+        } else {
+            if (tmp.exists() && tmp.size() > 0) {
+                qDebug()<<"/// ++ NVENC YES SUPPORTED ::::::";
+                // vaapi support enabled
+                nvencSupported = true;
+            } else {
+                qDebug()<<"/// ++ NVENC FAILED ::::::";
+                // vaapi support not enabled
+            }
+        }
+    }
+    KdenliveSettings::setNvencEnabled(nvencSupported);
+}
+
+
+void Wizard::updateHwStatus()
+{
+    auto *statusLabel = new KMessageWidget(this);
+    bool hwEnabled = KdenliveSettings::vaapiEnabled() || KdenliveSettings::nvencEnabled();
+    statusLabel->setMessageType(hwEnabled ? KMessageWidget::Positive : KMessageWidget::Information);
+    statusLabel->setWordWrap(true);
+    QString statusMessage;
+    if (!hwEnabled) {
+        statusMessage = i18n("No hardware encoders found.");
+    } else {
+        if (KdenliveSettings::nvencEnabled()) {
+            statusMessage += i18n("NVIDIA hardware encoders found and enabled.");
+        }
+        if (KdenliveSettings::vaapiEnabled()) {
+            statusMessage += i18n("VAAPI hardware encoders found and enabled.");
+        }
+    }
+    statusLabel->setText(statusMessage);
+    statusLabel->setCloseButtonVisible(false);
+    //errorLabel->setTimeout();
+    m_startLayout->addWidget(statusLabel);
+    statusLabel->animatedShow();
+    QTimer::singleShot(3000, statusLabel, &KMessageWidget::animatedHide);
 }

@@ -182,6 +182,13 @@ double TimelineModel::getClipSpeed(int clipId) const
     return m_allClips.at(clipId)->getSpeed();
 }
 
+int TimelineModel::getClipSplitPartner(int clipId) const
+{
+    READ_LOCK();
+    Q_ASSERT(m_allClips.count(clipId) > 0);
+    return m_groups->getSplitPartner(clipId);
+}
+
 int TimelineModel::getClipIn(int clipId) const
 {
     READ_LOCK();
@@ -255,6 +262,41 @@ int TimelineModel::getTrackMltIndex(int trackId) const
     return getTrackPosition(trackId) + 1;
 }
 
+int TimelineModel::getTrackSortValue(int trackId, bool separated) const
+{
+    if (separated) {
+        return getTrackPosition(trackId) + 1;
+    }
+    auto it = m_allTracks.end();
+    int aCount = 0;
+    int vCount = 0;
+    bool isAudio = false;
+    int trackPos = 0;
+    while (it != m_allTracks.begin()) {
+        --it;
+        bool audioTrack = (*it)->isAudioTrack();
+        if (audioTrack) {
+            aCount++;
+        } else {
+            vCount++;
+        }
+        if (trackId == (*it)->getId()) {
+            isAudio = audioTrack;
+            trackPos = audioTrack ? aCount : vCount;
+        }
+    }
+    int trackDiff = aCount - vCount;
+    if (trackDiff > 0) {
+        // more audio tracks
+        if (!isAudio) {
+            trackPos -= trackDiff;
+        } else if (trackPos > vCount) {
+            return -trackPos;
+        }
+    }
+    return isAudio ? ((aCount * trackPos) - 1) : (vCount + 1 - trackPos) * 2;
+}
+
 QList<int> TimelineModel::getLowerTracksId(int trackId, TrackType type) const
 {
     READ_LOCK();
@@ -267,14 +309,28 @@ QList<int> TimelineModel::getLowerTracksId(int trackId, TrackType type) const
             results << (*it)->getId();
             continue;
         }
-        int audioTrack = (*it)->getProperty("kdenlive:audio_track").toInt();
-        if (type == TrackType::AudioTrack && audioTrack == 1) {
+        bool audioTrack = (*it)->isAudioTrack();
+        if (type == TrackType::AudioTrack && audioTrack) {
             results << (*it)->getId();
-        } else if (type == TrackType::VideoTrack && audioTrack == 0) {
+        } else if (type == TrackType::VideoTrack && !audioTrack) {
             results << (*it)->getId();
         }
     }
     return results;
+}
+
+int TimelineModel::getPreviousVideoTrackIndex(int trackId) const
+{
+    READ_LOCK();
+    Q_ASSERT(isTrack(trackId));
+    auto it = m_iteratorTable.at(trackId);
+    while (it != m_allTracks.begin()) {
+        --it;
+        if (it != m_allTracks.begin() && !(*it)->isAudioTrack()) {
+            break;
+        }
+    }
+    return it == m_allTracks.begin() ? 0 : (*it)->getId();
 }
 
 int TimelineModel::getPreviousVideoTrackPos(int trackId) const
@@ -284,11 +340,67 @@ int TimelineModel::getPreviousVideoTrackPos(int trackId) const
     auto it = m_iteratorTable.at(trackId);
     while (it != m_allTracks.begin()) {
         --it;
-        if (it != m_allTracks.begin() && (*it)->getProperty("kdenlive:audio_track").toInt() == 0) {
+        if (it != m_allTracks.begin() && !(*it)->isAudioTrack()) {
             break;
         }
     }
     return it == m_allTracks.begin() ? 0 : getTrackMltIndex((*it)->getId());
+}
+
+int TimelineModel::getMirrorVideoTrackId(int trackId) const
+{
+    READ_LOCK();
+    Q_ASSERT(isTrack(trackId));
+    auto it = m_iteratorTable.at(trackId);
+    if (!(*it)->isAudioTrack()) {
+        // we expected an audio track...
+        return -1;
+    }
+    int count = 0;
+    ++it;
+    while (it != m_allTracks.end()) {
+        if ((*it)->isAudioTrack()) {
+            count++;
+        } else {
+            if (count == 0) {
+                return (*it)->getId();
+            }
+            count--;
+        }
+        ++it;
+    }
+    if (!(*it)->isAudioTrack() && count == 0) {
+        return (*it)->getId();
+    }
+    return -1;
+}
+
+int TimelineModel::getMirrorAudioTrackId(int trackId) const
+{
+    READ_LOCK();
+    Q_ASSERT(isTrack(trackId));
+    auto it = m_iteratorTable.at(trackId);
+    if ((*it)->isAudioTrack()) {
+        // we expected a video track...
+        return -1;
+    }
+    int count = 0;
+    --it;
+    while (it != m_allTracks.begin()) {
+        if (!(*it)->isAudioTrack()) {
+            count++;
+        } else {
+            if (count == 0) {
+                return (*it)->getId();
+            }
+            count--;
+        }
+        --it;
+    }
+    if ((*it)->isAudioTrack() && count == 0) {
+        return (*it)->getId();
+    }
+    return -1;
 }
 
 bool TimelineModel::requestClipMove(int clipId, int trackId, int position, bool updateView, bool invalidateTimeline, Fun &undo, Fun &redo)
@@ -298,30 +410,45 @@ bool TimelineModel::requestClipMove(int clipId, int trackId, int position, bool 
         return false;
     }
     Q_ASSERT(isClip(clipId));
-    if (getTrackById_const(trackId)->isLocked()) {
-        return false;
-    }
     std::function<bool(void)> local_undo = []() { return true; };
     std::function<bool(void)> local_redo = []() { return true; };
     bool ok = true;
     int old_trackId = getClipTrackId(clipId);
+    bool notifyViewOnly = false;
+    bool localUpdateView = updateView;
+    qDebug()<<"MOVING CLIP FROM: "<<old_trackId<<" == "<<trackId;
+    Fun update_model = []() { return true; };
+    if (old_trackId == trackId) {
+        // Move on same track, simply inform the view
+        localUpdateView = false;
+        notifyViewOnly = true;
+        update_model = [clipId, this]() {
+            QModelIndex modelIndex = makeClipIndexFromID(clipId);
+            notifyChange(modelIndex, modelIndex, {StartRole});
+            return true;
+        };
+    }
     if (old_trackId != -1) {
-        if (getTrackById_const(old_trackId)->isLocked()) {
-            return false;
+        if (notifyViewOnly) {
+            PUSH_LAMBDA(update_model, local_undo);
         }
-        ok = getTrackById(old_trackId)->requestClipDeletion(clipId, updateView, invalidateTimeline, local_undo, local_redo);
+        ok = getTrackById(old_trackId)->requestClipDeletion(clipId, localUpdateView, invalidateTimeline, local_undo, local_redo);
         if (!ok) {
             bool undone = local_undo();
             Q_ASSERT(undone);
             return false;
         }
     }
-    ok = getTrackById(trackId)->requestClipInsertion(clipId, position, updateView, invalidateTimeline, local_undo, local_redo);
+    ok = getTrackById(trackId)->requestClipInsertion(clipId, position, localUpdateView, invalidateTimeline, local_undo, local_redo);
     if (!ok) {
-        // qDebug()<<"-------------\n\nINSERTION FAILED, REVERTING\n\n-------------------";
+        qDebug()<<"-------------\n\nINSERTION FAILED, REVERTING\n\n-------------------";
         bool undone = local_undo();
         Q_ASSERT(undone);
         return false;
+    }
+    update_model();
+    if (notifyViewOnly) {
+        PUSH_LAMBDA(update_model, local_redo);
     }
     UPDATE_UNDO_REDO(local_redo, local_undo, undo, redo);
     return true;
@@ -357,7 +484,46 @@ bool TimelineModel::requestClipMove(int clipId, int trackId, int position, bool 
     return res;
 }
 
-int TimelineModel::suggestClipMove(int clipId, int trackId, int position, int snapDistance)
+bool TimelineModel::requestClipMoveAttempt(int clipId, int trackId, int position)
+{
+#ifdef LOGGING
+    m_logFile << "timeline->requestClipMove(" << clipId << "," << trackId << " ," << position << std::endl;
+#endif
+    QWriteLocker locker(&m_lock);
+    Q_ASSERT(m_allClips.count(clipId) > 0);
+    if (m_allClips[clipId]->getPosition() == position && getClipTrackId(clipId) == trackId) {
+        return true;
+    }
+    std::function<bool(void)> undo = []() { return true; };
+    std::function<bool(void)> redo = []() { return true; };
+    bool res = true;
+    if (m_groups->isInGroup(clipId)) {
+        // element is in a group.
+        int groupId = m_groups->getRootId(clipId);
+        int current_trackId = getClipTrackId(clipId);
+        int track_pos1 = getTrackPosition(trackId);
+        int track_pos2 = getTrackPosition(current_trackId);
+        int delta_track = track_pos1 - track_pos2;
+        int delta_pos = position - m_allClips[clipId]->getPosition();
+        res = requestGroupMove(clipId, groupId, delta_track, delta_pos, false, false, undo, redo, false);
+    } else {
+        res = requestClipMove(clipId, trackId, position, false, false, undo, redo);
+    }
+    if (res) {
+        undo();
+    }
+    return res;
+}
+
+int TimelineModel::suggestItemMove(int itemId, int trackId, int position, int snapDistance)
+{
+    if (isClip(itemId)) {
+        return suggestClipMove(itemId, trackId, position, snapDistance);
+    }
+    return suggestCompositionMove(itemId, trackId, position, snapDistance);
+}
+
+int TimelineModel::suggestClipMove(int clipId, int trackId, int position, int snapDistance, bool allowViewUpdate)
 {
 #ifdef LOGGING
     m_logFile << "timeline->suggestClipMove(" << clipId << "," << trackId << " ," << position << "); " << std::endl;
@@ -366,19 +532,20 @@ int TimelineModel::suggestClipMove(int clipId, int trackId, int position, int sn
     Q_ASSERT(isClip(clipId));
     Q_ASSERT(isTrack(trackId));
     int currentPos = getClipPosition(clipId);
-    if (currentPos == position) {
+    int sourceTrackId = getClipTrackId(clipId);
+    if (currentPos == position && sourceTrackId == trackId) {
         return position;
     }
     bool after = position > currentPos;
     if (snapDistance > 0) {
         // For snapping, we must ignore all in/outs of the clips of the group being moved
         std::vector<int> ignored_pts;
-        std::unordered_set<int> all_clips = {clipId};
+        std::unordered_set<int> all_items = {clipId};
         if (m_groups->isInGroup(clipId)) {
             int groupId = m_groups->getRootId(clipId);
-            all_clips = m_groups->getLeaves(groupId);
+            all_items = m_groups->getLeaves(groupId);
         }
-        for (int current_clipId : all_clips) {
+        for (int current_clipId : all_items) {
             if (getItemTrackId(current_clipId) != -1) {
                 int in = getItemPosition(current_clipId);
                 int out = in + getItemPlaytime(current_clipId);
@@ -394,14 +561,26 @@ int TimelineModel::suggestClipMove(int clipId, int trackId, int position, int sn
         }
     }
     // we check if move is possible
-    bool possible = requestClipMove(clipId, trackId, position, false, false, false);
-    // bool possible = requestClipMove(clipId, trackId, position, false, false, undo, redo);
+    bool possible = requestClipMove(clipId, trackId, position, true, false, false);
+    /*} else {
+        possible = requestClipMoveAttempt(clipId, trackId, position);
+    }*/
     if (possible) {
         return position;
     }
     // Find best possible move
     if (!m_groups->isInGroup(clipId)) {
         // Easy
+        //int currentTrackId = getClipTrackId(clipId);
+        // Try same track move
+        trackId = sourceTrackId;
+        possible = requestClipMove(clipId, trackId, position, true, false, false);
+        if (!possible) {
+            qDebug() << "CANNOT MOVE CLIP : "<<clipId<<" ON TK: "<<trackId<<", AT POS: "<<position;
+        } else {
+            return position;
+        }
+
         int blank_length = getTrackById(trackId)->getBlankSizeNearClip(clipId, after);
         qDebug() << "Found blank" << blank_length;
         if (blank_length < INT_MAX) {
@@ -411,18 +590,18 @@ int TimelineModel::suggestClipMove(int clipId, int trackId, int position, int sn
                 position = currentPos - blank_length;
             }
         } else {
-            return false;
+            return currentPos;
         }
-        possible = requestClipMove(clipId, trackId, position, false, false, false);
+        possible = requestClipMove(clipId, trackId, position, true, false, false);
         return possible ? position : currentPos;
     }
     // find best pos for groups
     int groupId = m_groups->getRootId(clipId);
-    std::unordered_set<int> all_clips = m_groups->getLeaves(groupId);
+    std::unordered_set<int> all_items = m_groups->getLeaves(groupId);
     QMap<int, int> trackPosition;
 
     // First pass, sort clips by track and keep only the first / last depending on move direction
-    for (int current_clipId : all_clips) {
+    for (int current_clipId : all_items) {
         int clipTrack = getClipTrackId(current_clipId);
         if (clipTrack == -1) {
             continue;
@@ -465,13 +644,19 @@ int TimelineModel::suggestClipMove(int clipId, int trackId, int position, int sn
             }
         }
     }
+    /*
++     * This returns erratic results, moving clips to 0.
     if (blank_length != 0) {
         int updatedPos = currentPos + (after ? blank_length : -blank_length);
-        possible = requestClipMove(clipId, trackId, updatedPos, false, false, false);
+        if (allowViewUpdate) {
+            possible = requestClipMove(clipId, trackId, updatedPos, false, false, false);
+        } else {
+            possible = requestClipMoveAttempt(clipId, trackId, updatedPos);
+        }
         if (possible) {
             return updatedPos;
         }
-    }
+    }*/
     return currentPos;
 }
 
@@ -485,7 +670,7 @@ int TimelineModel::suggestCompositionMove(int compoId, int trackId, int position
     Q_ASSERT(isTrack(trackId));
     int currentPos = getCompositionPosition(compoId);
     int currentTrack = getCompositionTrackId(compoId);
-    if (currentPos == position || currentTrack != trackId) {
+    if (currentPos == position && currentTrack == trackId) {
         return position;
     }
 
@@ -494,8 +679,8 @@ int TimelineModel::suggestCompositionMove(int compoId, int trackId, int position
         std::vector<int> ignored_pts;
         if (m_groups->isInGroup(compoId)) {
             int groupId = m_groups->getRootId(compoId);
-            auto all_clips = m_groups->getLeaves(groupId);
-            for (int current_compoId : all_clips) {
+            auto all_items = m_groups->getLeaves(groupId);
+            for (int current_compoId : all_items) {
                 // TODO: fix for composition
                 int in = getItemPosition(current_compoId);
                 int out = in + getItemPlaytime(current_compoId);
@@ -517,16 +702,12 @@ int TimelineModel::suggestCompositionMove(int compoId, int trackId, int position
         }
     }
     // we check if move is possible
-    Fun undo = []() { return true; };
-    Fun redo = []() { return true; };
-    bool possible = requestCompositionMove(compoId, trackId, m_allCompositions[compoId]->getForcedTrack(), position, false, undo, redo);
+    bool possible = requestCompositionMove(compoId, trackId, position, true, false);
     qDebug() << "Original move success" << possible;
     if (possible) {
-        bool undone = undo();
-        Q_ASSERT(undone);
         return position;
     }
-    bool after = position > currentPos;
+    /*bool after = position > currentPos;
     int blank_length = getTrackById(trackId)->getBlankSizeNearComposition(compoId, after);
     qDebug() << "Found blank" << blank_length;
     if (blank_length < INT_MAX) {
@@ -535,22 +716,8 @@ int TimelineModel::suggestCompositionMove(int compoId, int trackId, int position
         }
         return currentPos - blank_length;
     }
-    return position;
-}
-
-bool TimelineModel::requestClipInsertion(const QString &binClipId, int trackId, int position, int &id, bool logUndo, bool refreshView)
-{
-#ifdef LOGGING
-    m_logFile << "timeline->requestClipInsertion(" << binClipId.toStdString() << "," << trackId << " ," << position << ", dummy_id );" << std::endl;
-#endif
-    QWriteLocker locker(&m_lock);
-    Fun undo = []() { return true; };
-    Fun redo = []() { return true; };
-    bool result = requestClipInsertion(binClipId, trackId, position, id, logUndo, refreshView, undo, redo);
-    if (result && logUndo) {
-        PUSH_UNDO(undo, redo, i18n("Insert Clip"));
-    }
-    return result;
+    return position;*/
+    return currentPos;
 }
 
 bool TimelineModel::requestClipCreation(const QString &binClipId, int &id, PlaylistState::ClipState state, Fun &undo, Fun &redo)
@@ -580,7 +747,10 @@ bool TimelineModel::requestClipCreation(const QString &binClipId, int &id, Playl
         int in = binClipId.section(QLatin1Char('/'), 1, 1).toInt();
         int out = binClipId.section(QLatin1Char('/'), 2, 2).toInt();
         int initLength = m_allClips[clipId]->getPlaytime();
-        bool res = requestItemResize(clipId, initLength - in, false, true, local_undo, local_redo);
+        bool res = true;
+        if (in != 0) {
+            res = requestItemResize(clipId, initLength - in, false, true, local_undo, local_redo);
+        }
         res = res && requestItemResize(clipId, out - in + 1, true, true, local_undo, local_redo);
         if (!res) {
             bool undone = local_undo();
@@ -592,17 +762,30 @@ bool TimelineModel::requestClipCreation(const QString &binClipId, int &id, Playl
     return true;
 }
 
-bool TimelineModel::requestClipInsertion(const QString &binClipId, int trackId, int position, int &id, bool logUndo, bool refreshView, Fun &undo, Fun &redo)
+bool TimelineModel::requestClipInsertion(const QString &binClipId, int trackId, int position, int &id, bool logUndo, bool refreshView, bool useTargets)
+{
+#ifdef LOGGING
+    m_logFile << "timeline->requestClipInsertion(" << binClipId.toStdString() << "," << trackId << " ," << position << ", dummy_id );" << std::endl;
+#endif
+    QWriteLocker locker(&m_lock);
+    Fun undo = []() { return true; };
+    Fun redo = []() { return true; };
+    bool result = requestClipInsertion(binClipId, trackId, position, id, logUndo, refreshView, useTargets, undo, redo);
+    if (result && logUndo) {
+        PUSH_UNDO(undo, redo, i18n("Insert Clip"));
+    }
+    return result;
+}
+
+bool TimelineModel::requestClipInsertion(const QString &binClipId, int trackId, int position, int &id, bool logUndo, bool refreshView, bool useTargets,
+                                         Fun &undo, Fun &redo)
 {
     std::function<bool(void)> local_undo = []() { return true; };
     std::function<bool(void)> local_redo = []() { return true; };
     qDebug() << "requestClipInsertion " << binClipId << " "
              << " " << trackId << " " << position;
     bool res = false;
-    if (getTrackById_const(trackId)->isLocked()) {
-        return false;
-    }
-    ClipType type = ClipType::Unknown;
+    ClipType::ProducerType type = ClipType::Unknown;
     QString bid = binClipId.section(QLatin1Char('/'), 0, 0);
     if (!pCore->projectItemModel()->hasClip(bid)) {
         return false;
@@ -610,8 +793,8 @@ bool TimelineModel::requestClipInsertion(const QString &binClipId, int trackId, 
     std::shared_ptr<ProjectClip> master = pCore->projectItemModel()->getClipByBinID(bid);
     type = master->clipType();
 
-    if (type == ClipType::AV) {
-        if (m_audioTarget >= 0 && m_videoTarget == -1) {
+    if (type == ClipType::AV || type == ClipType::Playlist) {
+        if (m_audioTarget >= 0 && m_videoTarget == -1 && useTargets) {
             // If audio target is set but no video target, only insert audio
             trackId = m_audioTarget;
         }
@@ -627,17 +810,26 @@ bool TimelineModel::requestClipInsertion(const QString &binClipId, int trackId, 
                 audioDrop = true;
             }
         }
-        if (res && logUndo && !audioDrop) {
-            QList<int> possibleTracks = m_audioTarget >= 0 ? QList<int>() << m_audioTarget : getLowerTracksId(trackId, TrackType::AudioTrack);
+        if (res && !useTargets) {
+            int target_track = audioDrop ? m_videoTarget : m_audioTarget;
+            if (!useTargets) {
+                target_track = audioDrop ? getMirrorVideoTrackId(trackId) : getMirrorAudioTrackId(trackId);
+            }
+            // QList<int> possibleTracks = m_audioTarget >= 0 ? QList<int>() << m_audioTarget : getLowerTracksId(trackId, TrackType::AudioTrack);
+            QList<int> possibleTracks;
+            qDebug() << "CREATING SPLIT " << target_track << " usetargets" << useTargets;
+            if (target_track >= 0) {
+                possibleTracks << target_track;
+            }
             if (possibleTracks.isEmpty()) {
                 // No available audio track for splitting, abort
-                pCore->displayMessage(i18n("No available audio track for split operation"), ErrorMessage);
+                pCore->displayMessage(i18n("No available track for split operation"), ErrorMessage);
                 res = false;
             } else {
                 std::function<bool(void)> audio_undo = []() { return true; };
                 std::function<bool(void)> audio_redo = []() { return true; };
                 int newId;
-                res = requestClipCreation(binClipId, newId, PlaylistState::AudioOnly, audio_undo, audio_redo);
+                res = requestClipCreation(binClipId, newId, audioDrop ? PlaylistState::VideoOnly : PlaylistState::AudioOnly, audio_undo, audio_redo);
                 if (res) {
                     bool move = false;
                     while (!move && !possibleTracks.isEmpty()) {
@@ -661,7 +853,7 @@ bool TimelineModel::requestClipInsertion(const QString &binClipId, int trackId, 
             }
         }
     } else {
-        std::shared_ptr<ProjectClip> binClip = pCore->projectItemModel()->getClipByBinID(binClipId);
+        std::shared_ptr<ProjectClip> binClip = pCore->projectItemModel()->getClipByBinID(bid);
         res = requestClipCreation(binClipId, id, binClip->defaultState(), local_undo, local_redo);
         res = res && requestClipMove(id, trackId, position, refreshView, logUndo, local_undo, local_redo);
     }
@@ -682,7 +874,6 @@ bool TimelineModel::requestItemDeletion(int clipId, Fun &undo, Fun &redo)
         return requestGroupDeletion(clipId, undo, redo);
     }
     return requestClipDeletion(clipId, undo, redo);
-
 }
 
 bool TimelineModel::requestItemDeletion(int itemId, bool logUndo)
@@ -731,6 +922,7 @@ bool TimelineModel::requestClipDeletion(int clipId, Fun &undo, Fun &redo)
         return true;
     };
     if (operation()) {
+        emit removeFromSelection(clipId);
         UPDATE_UNDO_REDO(operation, reverse, undo, redo);
         return true;
     }
@@ -759,6 +951,7 @@ bool TimelineModel::requestCompositionDeletion(int compositionId, Fun &undo, Fun
         return true;
     };
     if (operation()) {
+        emit removeFromSelection(compositionId);
         UPDATE_UNDO_REDO(operation, reverse, undo, redo);
         return true;
     }
@@ -766,23 +959,23 @@ bool TimelineModel::requestCompositionDeletion(int compositionId, Fun &undo, Fun
     return false;
 }
 
-std::unordered_set<int> TimelineModel::getItemsAfterPosition(int trackId, int position, int end, bool listCompositions)
+std::unordered_set<int> TimelineModel::getItemsInRange(int trackId, int start, int end, bool listCompositions)
 {
     Q_UNUSED(listCompositions)
 
     std::unordered_set<int> allClips;
-    auto it = m_allTracks.cbegin();
     if (trackId == -1) {
-        while (it != m_allTracks.cend()) {
-            std::unordered_set<int> clipTracks = (*it)->getClipsAfterPosition(position, end);
+        for (const auto &track : m_allTracks) {
+            std::unordered_set<int> clipTracks = getItemsInRange(track->getId(), start, end, listCompositions);
             allClips.insert(clipTracks.begin(), clipTracks.end());
-            ++it;
         }
     } else {
-        int target_track_position = getTrackPosition(trackId);
-        std::advance(it, target_track_position);
-        std::unordered_set<int> clipTracks = (*it)->getClipsAfterPosition(position, end);
+        std::unordered_set<int> clipTracks = getTrackById(trackId)->getClipsInRange(start, end);
         allClips.insert(clipTracks.begin(), clipTracks.end());
+        if (listCompositions) {
+            std::unordered_set<int> compoTracks = getTrackById(trackId)->getCompositionsInRange(start, end);
+            allClips.insert(compoTracks.begin(), compoTracks.end());
+        }
     }
     return allClips;
 }
@@ -798,9 +991,9 @@ bool TimelineModel::requestGroupMove(int clipId, int groupId, int delta_track, i
     return res;
 }
 
-bool TimelineModel::requestGroupMove(int clipId, int groupId, int delta_track, int delta_pos, bool updateView, bool finalMove, Fun &undo, Fun &redo)
+bool TimelineModel::requestGroupMove(int clipId, int groupId, int delta_track, int delta_pos, bool updateView, bool finalMove, Fun &undo, Fun &redo,
+                                     bool allowViewRefresh)
 {
-    Q_UNUSED(clipId)
 #ifdef LOGGING
     m_logFile << "timeline->requestGroupMove(" << clipId << "," << groupId << " ," << delta_track << ", " << delta_pos << ", "
               << (updateView ? "true" : "false") << " ); " << std::endl;
@@ -808,62 +1001,114 @@ bool TimelineModel::requestGroupMove(int clipId, int groupId, int delta_track, i
     QWriteLocker locker(&m_lock);
     Q_ASSERT(m_allGroups.count(groupId) > 0);
     bool ok = true;
-    auto all_clips = m_groups->getLeaves(groupId);
-    std::vector<int> sorted_clips(all_clips.begin(), all_clips.end());
-    // we have to sort clip in an order that allows to do the move without self conflicts
-    // If we move up, we move first the clips on the upper tracks (and conversely).
-    // If we move left, we move first the leftmost clips (and conversely).
-    std::sort(sorted_clips.begin(), sorted_clips.end(), [delta_track, delta_pos, this](int clipId1, int clipId2) {
-        int trackId1 = getItemTrackId(clipId1);
-        int trackId2 = getItemTrackId(clipId2);
-        int track_pos1 = getTrackPosition(trackId1);
-        int track_pos2 = getTrackPosition(trackId2);
-        if (trackId1 == trackId2) {
-            int p1 = isClip(clipId1) ? m_allClips[clipId1]->getPosition() : m_allCompositions[clipId1]->getPosition();
-            int p2 = isClip(clipId2) ? m_allClips[clipId2]->getPosition() : m_allCompositions[clipId2]->getPosition();
-            return !(p1 <= p2) == !(delta_pos <= 0);
-        }
-        return !(track_pos1 <= track_pos2) == !(delta_track <= 0);
+    auto all_items = m_groups->getLeaves(groupId);
+    Q_ASSERT(all_items.size() > 1);
+    Fun local_undo = []() { return true; };
+    Fun local_redo = []() { return true; };
+
+    // Sort clips. We need to delete from right to left to avoid confusing the view
+    std::vector<int> sorted_clips(all_items.begin(), all_items.end());
+    std::sort(sorted_clips.begin(), sorted_clips.end(), [this](int clipId1, int clipId2) {
+        int p1 = isClip(clipId1) ? m_allClips[clipId1]->getPosition() : m_allCompositions[clipId1]->getPosition();
+        int p2 = isClip(clipId2) ? m_allClips[clipId2]->getPosition() : m_allCompositions[clipId2]->getPosition();
+        return p2 <= p1;
     });
-    // Parse all tracks then check none is locked. Maybe find a better way/place to do this
-    QList <int> trackList;
-    for (int clip : sorted_clips) {
-        int current_track_id = getItemTrackId(clip);
-        if (!trackList.contains(current_track_id)) {
-            trackList << current_track_id;
+
+    // Moving groups is a two stage process: first we remove the clips from the tracks, and then try to insert them back at their calculated new positions.
+    // This way, we ensure that no conflict will arise with clips inside the group being moved
+
+    Fun update_model = []() { return true; };
+
+    // Check if there is a track move
+    bool updatePositionOnly = false;
+    if (delta_track == 0 && updateView) {
+        updateView = false;
+        allowViewRefresh = false;
+        updatePositionOnly = true;
+        update_model = [sorted_clips, this]() {
+            QModelIndex modelIndex;
+            QVector<int> roles{StartRole};
+            for (int item : sorted_clips) {
+                if (isClip(item)) {
+                    modelIndex = makeClipIndexFromID(item);
+                } else {
+                    modelIndex = makeCompositionIndexFromID(item);
+                }
+                notifyChange(modelIndex, modelIndex, roles);
+            }
+            return true;
+        };
+    }
+
+    // First, remove clips
+    std::unordered_map<int, int> old_track_ids, old_position, old_forced_track;
+    for (int item : sorted_clips) {
+        int old_trackId = getItemTrackId(item);
+        old_track_ids[item] = old_trackId;
+        if (old_trackId != -1) {
+            bool updateThisView = allowViewRefresh;
+            if (isClip(item)) {
+                ok = ok && getTrackById(old_trackId)->requestClipDeletion(item, updateThisView, finalMove, local_undo, local_redo);
+                old_position[item] = m_allClips[item]->getPosition();
+            } else {
+                //ok = ok && getTrackById(old_trackId)->requestCompositionDeletion(item, updateThisView, local_undo, local_redo);
+                old_position[item] = m_allCompositions[item]->getPosition();
+                old_forced_track[item] = m_allCompositions[item]->getForcedTrack();
+            }
+            if (!ok) {
+                bool undone = local_undo();
+                Q_ASSERT(undone);
+                return false;
+            }
         }
     }
-    // Check that the group is not on a locked track
-    for (int tid : trackList) {
-        if (getTrackById_const(tid)->isLocked()) {
-            return false;
-        }
+
+    // Second step, reinsert clips at correct positions
+    int audio_delta, video_delta;
+    audio_delta = video_delta = delta_track;
+
+    if (getTrackById(old_track_ids[clipId])->isAudioTrack()) {
+        // Master clip is audio, so reverse delta for video clips
+        video_delta = -delta_track;
+    } else {
+        audio_delta = -delta_track;
     }
-    for (int clip : sorted_clips) {
-        int current_track_id = getItemTrackId(clip);
+
+    // Reverse sort. We need to insert from left to right to avoid confusing the view
+    std::reverse(std::begin(sorted_clips), std::end(sorted_clips));
+    for (int item : sorted_clips) {
+        int current_track_id = old_track_ids[item];
         int current_track_position = getTrackPosition(current_track_id);
-        int target_track_position = current_track_position + delta_track;
+        int d = getTrackById(current_track_id)->isAudioTrack() ? audio_delta : video_delta;
+        int target_track_position = current_track_position + d;
+        bool updateThisView = allowViewRefresh;
+
         if (target_track_position >= 0 && target_track_position < getTracksCount()) {
             auto it = m_allTracks.cbegin();
             std::advance(it, target_track_position);
             int target_track = (*it)->getId();
-            if (isClip(clip)) {
-                int target_position = m_allClips[clip]->getPosition() + delta_pos;
-                ok = requestClipMove(clip, target_track, target_position, updateView, finalMove, undo, redo);
+            int target_position = old_position[item] + delta_pos;
+            if (isClip(item)) {
+                ok = ok && requestClipMove(item, target_track, target_position, updateThisView, finalMove, local_undo, local_redo);
             } else {
-                int target_position = m_allCompositions[clip]->getPosition() + delta_pos;
-                ok = requestCompositionMove(clip, target_track, m_allCompositions[clip]->getForcedTrack(), target_position, updateView, undo, redo);
+                ok = ok && requestCompositionMove(item, target_track, old_forced_track[item], target_position, updateThisView, local_undo, local_redo);
             }
         } else {
             qDebug() << "// ABORTING; MOVE TRIED ON TRACK: " << target_track_position << "..\n..\n..";
             ok = false;
         }
         if (!ok) {
-            bool undone = undo();
+            bool undone = local_undo();
             Q_ASSERT(undone);
             return false;
         }
     }
+    if (updatePositionOnly) {
+        update_model();
+        PUSH_LAMBDA(update_model, local_redo);
+        PUSH_LAMBDA(update_model, local_undo);
+    }
+    UPDATE_UNDO_REDO(local_redo, local_undo, undo, redo);
     return true;
 }
 
@@ -887,7 +1132,7 @@ bool TimelineModel::requestGroupDeletion(int clipId, Fun &undo, Fun &redo)
     // we do a breadth first exploration of the group tree, ungroup (delete) every inner node, and then delete all the leaves.
     std::queue<int> group_queue;
     group_queue.push(m_groups->getRootId(clipId));
-    std::unordered_set<int> all_clips;
+    std::unordered_set<int> all_items;
     std::unordered_set<int> all_compositions;
     while (!group_queue.empty()) {
         int current_group = group_queue.front();
@@ -900,7 +1145,7 @@ bool TimelineModel::requestGroupDeletion(int clipId, Fun &undo, Fun &redo)
         int one_child = -1; // we need the id on any of the indices of the elements of the group
         for (int c : children) {
             if (isClip(c)) {
-                all_clips.insert(c);
+                all_items.insert(c);
                 one_child = c;
             } else if (isComposition(c)) {
                 all_compositions.insert(c);
@@ -919,7 +1164,7 @@ bool TimelineModel::requestGroupDeletion(int clipId, Fun &undo, Fun &redo)
             }
         }
     }
-    for (int clip : all_clips) {
+    for (int clip : all_items) {
         bool res = requestClipDeletion(clip, undo, redo);
         if (!res) {
             undo();
@@ -943,7 +1188,7 @@ int TimelineModel::requestItemResize(int itemId, int size, bool right, bool logU
               << (snapDistance > 0 ? "true" : "false") << " ); " << std::endl;
 #endif
     if (logUndo) {
-        qDebug()<<"---------------------\n---------------------\nRESIZE W/UNDO CALLED\n++++++++++++++++\n++++";
+        qDebug() << "---------------------\n---------------------\nRESIZE W/UNDO CALLED\n++++++++++++++++\n++++";
     }
     QWriteLocker locker(&m_lock);
     Q_ASSERT(isClip(itemId) || isComposition(itemId));
@@ -958,7 +1203,6 @@ int TimelineModel::requestItemResize(int itemId, int size, bool right, bool logU
             // only test move if proposed_size is valid
             bool success = false;
             if (isClip(itemId)) {
-                qDebug()<<"+++MODEL REQUEST RESIZE (LOGUNDO) "<<logUndo<<", SIZE: "<<proposed_size;
                 success = m_allClips[itemId]->requestResize(proposed_size, right, temp_undo, temp_redo, false);
             } else {
                 success = m_allCompositions[itemId]->requestResize(proposed_size, right, temp_undo, temp_redo, false);
@@ -1050,8 +1294,8 @@ int TimelineModel::requestClipsGroup(const std::unordered_set<int> &ids, bool lo
     if (m_temporarySelectionGroup > -1) {
         m_groups->destructGroupItem(m_temporarySelectionGroup);
         // We don't log in undo the selection changes
-        //int firstChild = *m_groups->getDirectChildren(m_temporarySelectionGroup).begin();
-        //requestClipUngroup(firstChild, undo, redo);
+        // int firstChild = *m_groups->getDirectChildren(m_temporarySelectionGroup).begin();
+        // requestClipUngroup(firstChild, undo, redo);
         m_temporarySelectionGroup = -1;
     }
     int result = requestClipsGroup(ids, undo, redo, type);
@@ -1112,12 +1356,20 @@ bool TimelineModel::requestClipUngroup(int id, bool logUndo)
     QWriteLocker locker(&m_lock);
     Fun undo = []() { return true; };
     Fun redo = []() { return true; };
-    bool result = requestClipUngroup(id, undo, redo);
+    bool result = true;
+    if (id == m_temporarySelectionGroup) {
+        // Ungrouping selection group, so get id of all children
+        std::unordered_set<int> leaves = m_groups->getDirectChildren(id);
+        // Delete selection group without undo
+        Fun tmp_undo = []() { return true; };
+        Fun tmp_redo = []() { return true; };
+        requestClipUngroup(id, tmp_undo, tmp_redo);
+        m_temporarySelectionGroup = -1;
+    } else {
+        result = requestClipUngroup(id, undo, redo);
+    }
     if (result && logUndo) {
         PUSH_UNDO(undo, redo, i18n("Ungroup clips"));
-    }
-    if (id == m_temporarySelectionGroup) {
-        m_temporarySelectionGroup = -1;
     }
     return result;
 }
@@ -1177,6 +1429,12 @@ bool TimelineModel::requestTrackDeletion(int trackId)
     Fun redo = []() { return true; };
     bool result = requestTrackDeletion(trackId, undo, redo);
     if (result) {
+        if (m_videoTarget == trackId) {
+            m_videoTarget = -1;
+        }
+        if (m_audioTarget == trackId) {
+            m_audioTarget = -1;
+        }
         PUSH_UNDO(undo, redo, i18n("Delete Track"));
     }
     return result;
@@ -1422,7 +1680,7 @@ void TimelineModel::updateDuration()
 
 int TimelineModel::duration() const
 {
-    return m_tractor->get_playtime();
+    return m_tractor->get_playtime() - TimelineModel::seekDuration;
 }
 
 std::unordered_set<int> TimelineModel::getGroupElements(int clipId)
@@ -1601,9 +1859,10 @@ int TimelineModel::getItemPlaytime(int itemId) const
     return getCompositionPlaytime(itemId);
 }
 
-int TimelineModel::getTrackCompositionsCount(int compoId) const
+int TimelineModel::getTrackCompositionsCount(int trackId) const
 {
-    return getTrackById_const(compoId)->getCompositionsCount();
+    Q_ASSERT(isTrack(trackId));
+    return getTrackById_const(trackId)->getCompositionsCount();
 }
 
 bool TimelineModel::requestCompositionMove(int compoId, int trackId, int position, bool updateView, bool logUndo)
@@ -1654,7 +1913,7 @@ bool TimelineModel::requestCompositionMove(int compoId, int trackId, int composi
     Q_ASSERT(isComposition(compoId));
     Q_ASSERT(isTrack(trackId));
     if (compositionTrack == -1 || (compositionTrack > 0 && trackId == getTrackIndexFromPosition(compositionTrack - 1))) {
-        qDebug() << "// compo track: " << trackId << ", PREVIOUS TK: " << getPreviousVideoTrackPos(trackId);
+        //qDebug() << "// compo track: " << trackId << ", PREVIOUS TK: " << getPreviousVideoTrackPos(trackId);
         compositionTrack = getPreviousVideoTrackPos(trackId);
     }
     if (compositionTrack == -1) {
@@ -1669,6 +1928,18 @@ bool TimelineModel::requestCompositionMove(int compoId, int trackId, int composi
     Fun local_redo = []() { return true; };
     bool ok = true;
     int old_trackId = getCompositionTrackId(compoId);
+    bool notifyViewOnly = false;
+    Fun update_model = []() { return true; };
+    if (old_trackId == trackId) {
+        // Move on same track, only send view update
+        updateView = false;
+        notifyViewOnly = true;
+        update_model = [compoId, this]() {
+            QModelIndex modelIndex = makeCompositionIndexFromID(compoId);
+            notifyChange(modelIndex, modelIndex, {StartRole});
+            return true;
+        };
+    }
     if (old_trackId != -1) {
         Fun delete_operation = []() { return true; };
         Fun delete_reverse = []() { return true; };
@@ -1688,6 +1959,9 @@ bool TimelineModel::requestCompositionMove(int compoId, int trackId, int composi
         if (!ok) qDebug() << "Move failed because of first delete operation";
 
         if (ok) {
+            if (notifyViewOnly) {
+                PUSH_LAMBDA(update_model, local_undo);
+            }
             UPDATE_UNDO_REDO(delete_operation, delete_reverse, local_undo, local_redo);
             ok = getTrackById(old_trackId)->requestCompositionDeletion(compoId, updateView, local_undo, local_redo);
         }
@@ -1718,6 +1992,9 @@ bool TimelineModel::requestCompositionMove(int compoId, int trackId, int composi
         ok = insert_operation();
         if (!ok) qDebug() << "Move failed because of second insert operation";
         if (ok) {
+            if (notifyViewOnly) {
+                PUSH_LAMBDA(update_model, local_redo);
+            }
             UPDATE_UNDO_REDO(insert_operation, insert_reverse, local_undo, local_redo);
         }
     }
@@ -1726,6 +2003,7 @@ bool TimelineModel::requestCompositionMove(int compoId, int trackId, int composi
         Q_ASSERT(undone);
         return false;
     }
+    update_model();
     UPDATE_UNDO_REDO(local_redo, local_undo, undo, redo);
     return true;
 }
@@ -1804,9 +2082,7 @@ bool TimelineModel::replantCompositions(int currentCompo, bool updateView)
     field->unlock();
     if (updateView) {
         QModelIndex modelIndex = makeCompositionIndexFromID(currentCompo);
-        QVector<int> roles;
-        roles.push_back(ItemATrack);
-        notifyChange(modelIndex, modelIndex, roles);
+        notifyChange(modelIndex, modelIndex, {ItemATrack});
     }
     return true;
 }
@@ -1871,10 +2147,27 @@ bool TimelineModel::checkConsistency()
             snaps[clip->getPosition() + clip->getPlaytime()] += 1;
         }
     }
+    for (const auto &cp : m_allCompositions) {
+        auto clip = (cp.second);
+        // Check parent/children link for tracks
+        if (auto ptr = clip->m_parent.lock()) {
+            if (ptr.get() != this) {
+                qDebug() << "Wrong parent for compo" << cp.first;
+                return false;
+            }
+        } else {
+            qDebug() << "NULL parent for compo" << cp.first;
+            return false;
+        }
+        if (getCompositionTrackId(cp.first) != -1) {
+            snaps[clip->getPosition()] += 1;
+            snaps[clip->getPosition() + clip->getPlaytime()] += 1;
+        }
+    }
     // Check snaps
     auto stored_snaps = m_snaps->_snaps();
     if (snaps.size() != stored_snaps.size()) {
-        qDebug() << "Wrong number of snaps";
+        qDebug() << "Wrong number of snaps: "<<snaps.size()<<" == "<<stored_snaps.size();
         return false;
     }
     for (auto i = snaps.begin(), j = stored_snaps.begin(); i != snaps.end(); ++i, ++j) {
@@ -1946,7 +2239,7 @@ bool TimelineModel::checkConsistency()
             // we iterate to try to find a matching compo
             for (int compoId : remaining_compo) {
                 if (getTrackMltIndex(getCompositionTrackId(compoId)) == currentTrack &&
-                    getTrackMltIndex(m_allCompositions[compoId]->getATrack()) == currentATrack && m_allCompositions[compoId]->getIn() == currentIn &&
+                    m_allCompositions[compoId]->getATrack() == currentATrack && m_allCompositions[compoId]->getIn() == currentIn &&
                     m_allCompositions[compoId]->getOut() == currentOut) {
                     foundId = compoId;
                     break;
@@ -1977,42 +2270,13 @@ bool TimelineModel::checkConsistency()
         }
         return false;
     }
-    return true;
-}
 
-bool TimelineModel::requestItemResizeToPos(int itemId, int position, bool right)
-{
-    QWriteLocker locker(&m_lock);
-    Q_ASSERT(isClip(itemId) || isComposition(itemId));
-    int in, out;
-    if (isClip(itemId)) {
-        in = getClipPosition(itemId);
-        out = in + getClipPlaytime(itemId) - 1;
-    } else {
-        in = getCompositionPosition(itemId);
-        out = in + getCompositionPlaytime(itemId) - 1;
+    // We check consistency of groups
+    if (!m_groups->checkConsistency(true, true)) {
+        qDebug()<<"== ERROR IN GROUP CONSISTENCY";
+        return false;
     }
-    int size = 0;
-    if (!right) {
-        if (position < out) {
-            size = out - position;
-        }
-    } else {
-        if (position > in) {
-            size = position - in;
-        }
-    }
-    Fun undo = []() { return true; };
-    Fun redo = []() { return true; };
-    bool result = requestItemResize(itemId, size, right, true, undo, redo);
-    if (result) {
-        if (isClip(itemId)) {
-            PUSH_UNDO(undo, redo, i18n("Resize clip"));
-        } else {
-            PUSH_UNDO(undo, redo, i18n("Resize composition"));
-        }
-    }
-    return result;
+    return true;
 }
 
 void TimelineModel::setTimelineEffectsEnabled(bool enabled)
@@ -2081,21 +2345,26 @@ QStringList TimelineModel::extractCompositionLumas() const
 
 void TimelineModel::adjustAssetRange(int clipId, int in, int out)
 {
-    //pCore->adjustAssetRange(clipId, in, out);
+    Q_UNUSED(clipId)
+    Q_UNUSED(in)
+    Q_UNUSED(out)
+    // pCore->adjustAssetRange(clipId, in, out);
 }
 
 void TimelineModel::requestClipReload(int clipId)
 {
     std::function<bool(void)> local_undo = []() { return true; };
     std::function<bool(void)> local_redo = []() { return true; };
-    m_allClips[clipId]->refreshProducerFromBin();
 
     // in order to make the producer change effective, we need to unplant / replant the clip in int track
     int old_trackId = getClipTrackId(clipId);
     int oldPos = getClipPosition(clipId);
     if (old_trackId != -1) {
         getTrackById(old_trackId)->requestClipDeletion(clipId, false, true, local_undo, local_redo);
-        getTrackById(old_trackId)->requestClipInsertion(clipId, oldPos, true, true, local_undo, local_redo);
+    }
+    m_allClips[clipId]->refreshProducerFromBin();
+    if (old_trackId != -1) {
+        getTrackById(old_trackId)->requestClipInsertion(clipId, oldPos, false, true, local_undo, local_redo);
     }
 }
 
@@ -2116,82 +2385,69 @@ void TimelineModel::requestClipUpdate(int clipId, const QVector<int> &roles)
     notifyChange(modelIndex, modelIndex, roles);
 }
 
-bool TimelineModel::requestClipTimeWarp(int clipId, int trackId, int blankSpace, double speed, Fun &undo, Fun &redo)
+bool TimelineModel::requestClipTimeWarp(int clipId, double speed, Fun &undo, Fun &redo)
 {
     QWriteLocker locker(&m_lock);
+    if (qFuzzyCompare(speed, m_allClips[clipId]->getSpeed())) {
+        return true;
+    }
     std::function<bool(void)> local_undo = []() { return true; };
     std::function<bool(void)> local_redo = []() { return true; };
     int oldPos = getClipPosition(clipId);
     // in order to make the producer change effective, we need to unplant / replant the clip in int track
     bool success = true;
-    success = getTrackById(trackId)->requestClipDeletion(clipId, true, true, local_undo, local_redo);
-    if (success) {
-        success = m_allClips[clipId]->useTimewarpProducer(speed, blankSpace, local_undo, local_redo);
+    int trackId = getClipTrackId(clipId);
+    if (trackId != -1) {
+        success = success && getTrackById(trackId)->requestClipDeletion(clipId, true, true, local_undo, local_redo);
     }
     if (success) {
-        success = getTrackById(trackId)->requestClipInsertion(clipId, oldPos, true, true, local_undo, local_redo);
-        if (!success) {
-            local_undo();
-            return false;
-        }
+        success = m_allClips[clipId]->useTimewarpProducer(speed, local_undo, local_redo);
     }
-    PUSH_LAMBDA(local_undo, undo);
-    PUSH_LAMBDA(local_redo, redo);
+    if (trackId != -1) {
+        success = success && getTrackById(trackId)->requestClipInsertion(clipId, oldPos, true, true, local_undo, local_redo);
+    }
+    if (!success) {
+        local_undo();
+        return false;
+    }
+    UPDATE_UNDO_REDO(local_redo, local_undo, undo, redo);
     return success;
 }
 
-bool TimelineModel::changeItemSpeed(int clipId, int speed)
+bool TimelineModel::requestClipTimeWarp(int clipId, double speed)
 {
     Fun undo = []() { return true; };
     Fun redo = []() { return true; };
     // Get main clip info
     int trackId = getClipTrackId(clipId);
-    int splitId = -1;
-    // Check if clip has a split partner
     bool result = true;
     if (trackId != -1) {
-        int blankSpace = getTrackById(trackId)->getBlankSizeNearClip(clipId, true) + getClipPlaytime(clipId) - 1;
-        splitId = m_groups->getSplitPartner(clipId);
-        bool success = true;
+        // Check if clip has a split partner
+        int splitId = m_groups->getSplitPartner(clipId);
         if (splitId > -1) {
-            int split_trackId = getClipTrackId(splitId);
-            blankSpace = qMin(blankSpace, getTrackById(split_trackId)->getBlankSizeNearClip(splitId, true));
-            result = requestClipTimeWarp(splitId, split_trackId, blankSpace, speed / 100.0, undo, redo);
+            result = requestClipTimeWarp(splitId, speed / 100.0, undo, redo);
         }
         if (result) {
-            result = requestClipTimeWarp(clipId, trackId, blankSpace, speed / 100.0, undo, redo);
+            result = requestClipTimeWarp(clipId, speed / 100.0, undo, redo);
+        } else {
+            pCore->displayMessage(i18n("Change speed failed"), ErrorMessage);
+            undo();
+            return false;
         }
     } else {
-        m_allClips[clipId]->useTimewarpProducer(speed, -1, undo, redo);
+        // If clip is not inserted on a track, we just change the producer
+        m_allClips[clipId]->useTimewarpProducer(speed, undo, redo);
     }
     if (result) {
-        QVector<int> roles;
-        roles.push_back(SpeedRole);
-        Fun update_model = [clipId, roles, this]() {
-            QModelIndex modelIndex = makeClipIndexFromID(clipId);
-            notifyChange(modelIndex, modelIndex, roles);
-            return true;
-        };
-        PUSH_LAMBDA(update_model, undo);
-        PUSH_LAMBDA(update_model, redo);
-        if (splitId > -1) {
-            Fun update_model2 = [splitId, roles, this]() {
-                QModelIndex modelIndex = makeClipIndexFromID(splitId);
-                notifyChange(modelIndex, modelIndex, roles);
-                return true;
-            };
-            PUSH_LAMBDA(update_model2, undo);
-            PUSH_LAMBDA(update_model2, redo);
-        }
         PUSH_UNDO(undo, redo, i18n("Change clip speed"));
         return true;
     }
     return false;
 }
 
-
 const QString TimelineModel::getTrackTagById(int trackId) const
 {
+    READ_LOCK();
     Q_ASSERT(isTrack(trackId));
     bool isAudio = getTrackById_const(trackId)->isAudioTrack();
     int count = 1;
@@ -2212,5 +2468,52 @@ const QString TimelineModel::getTrackTagById(int trackId) const
         }
         it++;
     }
-    return isAudio ? QStringLiteral("A%1").arg(totalAudio - count) : QStringLiteral("V%1").arg(count-1);
+    return isAudio ? QStringLiteral("A%1").arg(totalAudio - count) : QStringLiteral("V%1").arg(count - 1);
+}
+
+void TimelineModel::updateProfile(Mlt::Profile *profile)
+{
+    m_profile = profile;
+    m_tractor->set_profile(*m_profile);
+}
+
+int TimelineModel::getBlankSizeNearClip(int clipId, bool after) const
+{
+    READ_LOCK();
+    Q_ASSERT(m_allClips.count(clipId) > 0);
+    int trackId = getClipTrackId(clipId);
+    if (trackId != -1) {
+        return getTrackById_const(trackId)->getBlankSizeNearClip(clipId, after);
+    }
+    return 0;
+}
+
+int TimelineModel::getPreviousTrackId(int trackId)
+{
+    READ_LOCK();
+    Q_ASSERT(isTrack(trackId));
+    auto it = m_iteratorTable.at(trackId);
+    bool audioWanted = (*it)->isAudioTrack();
+    while (it != m_allTracks.begin()) {
+        --it;
+        if (it != m_allTracks.begin() && (*it)->isAudioTrack() == audioWanted) {
+            break;
+        }
+    }
+    return it == m_allTracks.begin() ? trackId : (*it)->getId();
+}
+
+int TimelineModel::getNextTrackId(int trackId)
+{
+    READ_LOCK();
+    Q_ASSERT(isTrack(trackId));
+    auto it = m_iteratorTable.at(trackId);
+    bool audioWanted = (*it)->isAudioTrack();
+    while (it != m_allTracks.end()) {
+        ++it;
+        if (it != m_allTracks.end() && (*it)->isAudioTrack() == audioWanted) {
+            break;
+        }
+    }
+    return it == m_allTracks.end() ? trackId : (*it)->getId();
 }

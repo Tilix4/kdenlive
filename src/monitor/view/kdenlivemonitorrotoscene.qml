@@ -1,24 +1,28 @@
-import QtQuick 2.0
+import QtQuick 2.6
+import QtQuick.Controls 1.4
 
 Item {
     id: root
     objectName: "rootrotoscene"
 
+    SystemPalette { id: activePalette }
     // default size, but scalable by user
     height: 300; width: 400
     property string comment
     property string framenum
-    property rect framesize: Qt.rect(5, 5, 200, 200)
     property point profile
-    profile: Qt.point(1920, 1080)
-    property point center: Qt.point(960, 540)
-    property double zoom
+    property point center
     property double scalex : 1
     property double scaley : 1
     property double stretch : 1
     property double sourcedar : 1
     property double offsetx : 0
     property double offsety : 0
+    property double frameSize: 10
+    property int duration: 300
+    property double timeScale: 1
+    property real baseUnit: fontMetrics.font.pointSize
+    property int mouseRulerPos: 0
     onOffsetxChanged: canvas.requestPaint()
     onOffsetyChanged: canvas.requestPaint()
     onScalexChanged: canvas.requestPaint()
@@ -37,9 +41,22 @@ Item {
     signal effectPolygonChanged()
     signal addKeyframe()
     signal seekToKeyframe()
-    signal toolBarChanged(bool doAccept)
-    onZoomChanged: {
-        effectToolBar.setZoom(root.zoom)
+
+    onDurationChanged: {
+        clipMonitorRuler.updateRuler()
+    }
+    onWidthChanged: {
+        clipMonitorRuler.updateRuler()
+    }
+
+    onIskeyframeChanged: {
+        console.log('KEYFRAME CHANGED: ', iskeyframe)
+        canvas.requestPaint()
+    }
+
+    FontMetrics {
+        id: fontMetrics
+        font.family: "Arial"
     }
 
     function refreshdar() {
@@ -52,21 +69,18 @@ Item {
         canvas.requestPaint()
     }
 
-    Text {
-        id: fontReference
-        property int fontSize
-        fontSize: font.pointSize
-    }
+    Item {
+        id: monitorOverlay
+        height: root.height - controller.rulerHeight
+        width: root.width
 
     Canvas {
       id: canvas
       property double handleSize
       property double darOffset : 0
-      width: root.width
-      height: root.height
-      anchors.centerIn: root
+      anchors.fill: parent
       contextType: "2d";
-      handleSize: fontReference.fontSize / 2
+      handleSize: root.baseUnit / 2
       renderTarget: Canvas.FramebufferObject
       renderStrategy: Canvas.Cooperative
 
@@ -165,21 +179,40 @@ Item {
         property color hoverColor: "#ff0000"
         width: root.profile.x * root.scalex
         height: root.profile.y * root.scaley
-        x: root.center.x - width / 2 - root.offsetx
-        y: root.center.y - height / 2 - root.offsety
+        x: root.center.x - width / 2 - root.offsetx;
+        y: root.center.y - height / 2 - root.offsety;
         color: "transparent"
         border.color: "#ffffff00"
+    }
+
+    Rectangle {
+        anchors.centerIn: parent
+        width: label.contentWidth + 6
+        height: label.contentHeight + 6
+        visible: !root.isDefined && !global.containsMouse
+        opacity: 0.8
+        Text {
+            id: label
+            text: i18n('Click to add points,\nleft click to close shape.')
+            font.pointSize: root.baseUnit
+            verticalAlignment: Text.AlignVCenter
+            horizontalAlignment: Text.AlignHCenter
+            anchors {
+                fill: parent
+            }
+            color: 'black'
+         }
+        color: "yellow"
     }
 
     MouseArea {
         id: global
         objectName: "global"
         acceptedButtons: Qt.LeftButton | Qt.RightButton
-        width: root.width; height: root.height
-        property bool containsMouse
-        anchors.centerIn: root
+        anchors.fill: parent
+        property bool pointContainsMouse
         hoverEnabled: true
-        cursorShape: containsMouse ? Qt.PointingHandCursor : Qt.ArrowCursor
+        cursorShape: !root.isDefined ? Qt.PointingHandCursor : pointContainsMouse ? Qt.PointingHandCursor : Qt.ArrowCursor
 
         onClicked: {
             if (!root.isDefined) {
@@ -244,12 +277,12 @@ Item {
                 var p1 = canvas.convertPoint(root.centerPoints[i])
                 if (Math.abs(p1.x - mouseX) <= canvas.handleSize && Math.abs(p1.y - mouseY) <= canvas.handleSize) {
                     if (i == root.requestedKeyFrame) {
-                        containsMouse = true;
+                        pointContainsMouse = true;
                         return;
                     }
                     root.requestedKeyFrame = i
                     canvas.requestPaint()
-                    containsMouse = true;
+                    pointContainsMouse = true;
                     return;
                 }
               }
@@ -258,12 +291,12 @@ Item {
                 var p1 = canvas.convertPoint(root.centerPointsTypes[i])
                 if (Math.abs(p1.x - mouseX) <= canvas.handleSize/2 && Math.abs(p1.y - mouseY) <= canvas.handleSize/2) {
                     if (i == root.requestedSubKeyFrame) {
-                        containsMouse = true;
+                        pointContainsMouse = true;
                         return;
                     }
                     root.requestedSubKeyFrame = i
                     canvas.requestPaint()
-                    containsMouse = true;
+                    pointContainsMouse = true;
                     return;
                 } 
               }
@@ -272,19 +305,30 @@ Item {
               }
               root.requestedKeyFrame = -1
               root.requestedSubKeyFrame = -1
-              containsMouse = false;
+              pointContainsMouse = false;
               canvas.requestPaint()
             }
         }
     }
+}
     EffectToolBar {
         id: effectToolBar
         anchors {
-            left: parent.left
+            right: parent.right
             top: parent.top
-            topMargin: 10
-            leftMargin: 10
+            topMargin: 4
+            rightMargin: 4
         }
-        visible: root.showToolbar
+        visible: global.mouseX >= x - 10
     }
+    MonitorRuler {
+        id: clipMonitorRuler
+        anchors {
+            left: root.left
+            right: root.right
+            bottom: root.bottom
+        }
+        height: controller.rulerHeight
+    }
+
 }

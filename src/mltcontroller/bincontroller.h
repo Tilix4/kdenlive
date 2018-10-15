@@ -34,7 +34,7 @@ class MarkerListModel;
 namespace Mlt {
 class Playlist;
 class Profile;
-}
+} // namespace Mlt
 
 /**
  * @class BinController
@@ -51,12 +51,10 @@ public:
     explicit BinController(const QString &profileName = QString());
     virtual ~BinController();
 
-
     friend class ClipController;
     friend class ProjectClip;
 
 protected:
-
 public:
     /** @brief Store a timeline producer in clip list for later re-use
      * @param id The clip's id
@@ -64,18 +62,14 @@ public:
      * */
     void loadExtraProducer(const QString &id, Mlt::Producer *prod);
 
-    /** @brief Returns the name MLT will use to store our bin's playlist */
-    static const QString binPlaylistId();
 
     /** @brief Clear the bin's playlist */
     void destroyBin();
 
-
     /** @brief Returns true if a clip with that id is in our bin's playlist
-    * @param id The clip's id as stored in DocClipBase
-    */
+     * @param id The clip's id as stored in DocClipBase
+     */
     bool hasClip(const QString &id);
-
 
     /** @brief Get the MLT Producer for a given id.
      @param id The clip id as stored in the DocClipBase class */
@@ -107,7 +101,6 @@ public:
 
     /** @brief A Bin clip effect was changed, update track producers */
     void updateTrackProducer(const QString &id);
-
 
     /** @brief Save document properties in MLT's bin playlist */
     void saveDocumentProperties(const QMap<QString, QString> &props, const QMap<QString, QString> &metadata, std::shared_ptr<MarkerListModel> guideModel);

@@ -45,9 +45,7 @@ class CollapsibleEffectView : public AbstractCollapsibleWidget
     Q_OBJECT
 
 public:
-
-    explicit CollapsibleEffectView(std::shared_ptr<EffectItemModel> effectModel, QSize frameSize, QImage icon,
-                                   QWidget *parent = nullptr);
+    explicit CollapsibleEffectView(std::shared_ptr<EffectItemModel> effectModel, QSize frameSize, QImage icon, QWidget *parent = nullptr);
     ~CollapsibleEffectView();
     QLabel *title;
 
@@ -115,6 +113,7 @@ private:
     AssetParameterView *m_view;
     std::shared_ptr<EffectItemModel> m_model;
     KDualAction *m_collapse;
+    QToolButton *m_keyframesButton;
     QList<CollapsibleEffectView *> m_subParamWidgets;
     QDomElement m_effect;
     ItemInfo m_itemInfo;

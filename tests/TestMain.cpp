@@ -2,6 +2,8 @@
 #include "catch.hpp"
 
 #include "core.h"
+#include "src/mltcontroller/clipcontroller.h"
+#include "src/effects/effectsrepository.hpp"
 #include <QApplication>
 #include <mlt++/MltFactory.h>
 #include <mlt++/MltRepository.h>
@@ -14,8 +16,11 @@ int main(int argc, char *argv[])
     app.setApplicationName(QStringLiteral("kdenlive"));
     std::unique_ptr<Mlt::Repository> repo(Mlt::Factory::init(nullptr));
     Core::build();
+    // if Kdenlive is not installed, ensure we have one keyframable effect
+    EffectsRepository::get()->reloadCustom(QFileInfo("../data/effects/audiobalance.xml").absoluteFilePath());
 
     int result = Catch::Session().run(argc, argv);
+    ClipController::mediaUnavailable.reset();
 
     // global clean-up...
     // delete repo;

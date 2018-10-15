@@ -71,7 +71,8 @@ public:
      * is moved to another track. When false, the a_track will automatically change to lower video track
      */
     void setForceTrack(bool force);
-    /* @brief Returns the id of the second track involved in the composition (a_track) or -1 if the a_track should be automatically updated when the composition changes track
+    /* @brief Returns the id of the second track involved in the composition (a_track) or -1 if the a_track should be automatically updated when the composition
+     * changes track
      */
     int getForcedTrack() const;
 
@@ -93,6 +94,9 @@ public:
 protected:
     Mlt::Transition *service() const override;
     void setInOut(int in, int out) override;
+    void setCurrentTrackId(int tid) override;
+    virtual int getOut() const override;
+    virtual int getIn() const override;
 
     /* @brief Performs a resize of the given composition.
        Returns true if the operation succeeded, and otherwise nothing is modified
@@ -108,6 +112,7 @@ protected:
 private:
     int a_track;
     QString m_compositionName;
+    int m_duration;
 };
 
 #endif

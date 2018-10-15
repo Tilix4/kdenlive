@@ -46,9 +46,7 @@ FlashLabel::FlashLabel(QWidget *parent)
     setAutoFillBackground(true);
 }
 
-FlashLabel::~FlashLabel()
-{
-}
+FlashLabel::~FlashLabel() {}
 
 void FlashLabel::setColor(const QColor &col)
 {
@@ -86,9 +84,7 @@ StatusBarMessageLabel::StatusBarMessageLabel(QWidget *parent)
     connect(m_label, &QLabel::linkActivated, this, &StatusBarMessageLabel::slotShowJobLog);
 }
 
-StatusBarMessageLabel::~StatusBarMessageLabel()
-{
-}
+StatusBarMessageLabel::~StatusBarMessageLabel() {}
 
 void StatusBarMessageLabel::mousePressEvent(QMouseEvent *event)
 {
@@ -140,6 +136,9 @@ void StatusBarMessageLabel::setMessage(const QString &text, MessageType type, in
                     }
                 }
                 m_messageQueue = cleanList;
+            } else {
+                // Important error message, delete previous queue so they don't appear afterwards out of context
+                m_messageQueue.clear();
             }
 
             m_messageQueue.push_front(item);
@@ -204,7 +203,7 @@ bool StatusBarMessageLabel::slotMessageTimeout()
     }
 
     QColor bgColor =
-        KStatefulBrush(KColorScheme::Window, KColorScheme::NegativeBackground, KSharedConfig::openConfig(KdenliveSettings::colortheme())).brush(this).color();
+        KStatefulBrush(KColorScheme::Window, KColorScheme::NegativeBackground).brush(this).color();
     const char *iconName = nullptr;
     setColor(parentWidget()->palette().window().color());
     switch (m_currentMessage.type) {

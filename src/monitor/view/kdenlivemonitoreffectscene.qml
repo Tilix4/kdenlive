@@ -1,4 +1,4 @@
-import QtQuick 2.0
+import QtQuick 2.4
 
 Item {
     id: root
@@ -13,7 +13,6 @@ Item {
     property rect adjustedFrame
     property point profile
     property point center
-    property double zoom
     property double scalex
     property double scaley
     property double offsetx : 0
@@ -22,7 +21,7 @@ Item {
     property double timeScale: 1
     property double frameSize: 10
     property int duration: 300
-    property bool mouseOverRuler: false
+    property real baseUnit: fontMetrics.font.pointSize
     property int mouseRulerPos: 0
     onScalexChanged: canvas.requestPaint()
     onScaleyChanged: canvas.requestPaint()
@@ -33,32 +32,19 @@ Item {
     property var centerPoints: []
     property var centerPointsTypes: []
     onCenterPointsChanged: canvas.requestPaint()
-    property bool showToolbar: false
     signal effectChanged()
     signal centersChanged()
-    signal addKeyframe()
-    signal seekToKeyframe()
-    signal toolBarChanged(bool doAccept)
-    onZoomChanged: {
-        effectToolBar.setZoom(root.zoom)
-    }
+
     onDurationChanged: {
-        timeScale = width / duration
-        if (duration < 200) {
-            frameSize = 5 * timeScale
-        } else if (duration < 2500) {
-            frameSize = 25 * timeScale
-        } else if (duration < 10000) {
-            frameSize = 50 * timeScale
-        } else {
-            frameSize = 100 * timeScale
-        }
+        clipMonitorRuler.updateRuler()
+    }
+    onWidthChanged: {
+        clipMonitorRuler.updateRuler()
     }
 
-    Text {
-        id: fontReference
-        property int fontSize
-        fontSize: font.pointSize
+    FontMetrics {
+        id: fontMetrics
+        font.family: "Arial"
     }
 
     Canvas {
@@ -68,7 +54,7 @@ Item {
       height: root.height
       anchors.centerIn: root
       contextType: "2d";
-      handleSize: fontReference.fontSize / 2
+      handleSize: root.baseUnit / 2
       renderStrategy: Canvas.Threaded;
       onPaint:
       {
@@ -210,30 +196,21 @@ Item {
         onPressed: {
             if (mouse.button & Qt.LeftButton) {
                 if (root.requestedKeyFrame >= 0 && !isMoving) {
-                    root.seekToKeyframe();
+                    controller.seekToKeyframe();
                 }
             }
             isMoving = false
 
         }
         onDoubleClicked: {
-            root.addKeyframe()
+            controller.addRemoveKeyframe()
         }
         onReleased: {
             root.requestedKeyFrame = -1
             isMoving = false;
         }
     }
-    EffectToolBar {
-        id: effectToolBar
-        anchors {
-            left: parent.left
-            top: parent.top
-            topMargin: 10
-            leftMargin: 10
-        }
-        visible: root.showToolbar
-    }
+
     Rectangle {
         id: framerect
         property color hoverColor: "#ffffff"
@@ -527,6 +504,16 @@ Item {
             height: 1
             color: framerect.hoverColor
         }
+    }
+    EffectToolBar {
+        id: effectToolBar
+        anchors {
+            right: parent.right
+            top: parent.top
+            topMargin: 4
+            rightMargin: 4
+        }
+        visible: global.mouseX >= x - 10
     }
     MonitorRuler {
         id: clipMonitorRuler

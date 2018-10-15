@@ -21,7 +21,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 #include "projectfolderup.h"
 #include "projectclip.h"
-#include "utils/KoIconUtils.h"
+
 
 #include <KLocalizedString>
 #include <QDomElement>
@@ -29,7 +29,7 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 ProjectFolderUp::ProjectFolderUp(std::shared_ptr<ProjectItemModel> model)
     : AbstractProjectItem(AbstractProjectItem::FolderUpItem, QString(), model)
 {
-    m_thumbnail = KoIconUtils::themedIcon(QStringLiteral("go-previous"));
+    m_thumbnail = QIcon::fromTheme(QStringLiteral("go-previous"));
     m_name = i18n("Back");
 }
 
@@ -41,9 +41,7 @@ std::shared_ptr<ProjectFolderUp> ProjectFolderUp::construct(std::shared_ptr<Proj
     return self;
 }
 
-ProjectFolderUp::~ProjectFolderUp()
-{
-}
+ProjectFolderUp::~ProjectFolderUp() {}
 
 std::shared_ptr<ProjectClip> ProjectFolderUp::clip(const QString &id)
 {
@@ -68,9 +66,7 @@ std::shared_ptr<ProjectClip> ProjectFolderUp::clipAt(int index)
     return std::shared_ptr<ProjectClip>();
 }
 
-void ProjectFolderUp::setBinEffectsEnabled(bool)
-{
-}
+void ProjectFolderUp::setBinEffectsEnabled(bool) {}
 
 QDomElement ProjectFolderUp::toXml(QDomDocument &document, bool)
 {

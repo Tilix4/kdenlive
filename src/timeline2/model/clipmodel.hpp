@@ -77,11 +77,26 @@ public:
     Q_INVOKABLE bool showKeyframes() const;
     Q_INVOKABLE void setShowKeyframes(bool show);
 
+    /* @brief Returns true if the clip can be converted to a video clip */
+    bool canBeVideo() const;
+    /* @brief Returns true if the clip can be converted to an audio clip */
+    bool canBeAudio() const;
+
+    /* @brief Returns a comma separated list of effect names */
+    const QString effectNames() const;
+
     /** @brief Returns the timeline clip status (video / audio only) */
     PlaylistState::ClipState clipState() const;
+    /** @brief Returns the bin clip type (image, color, AV, ...) */
+    ClipType::ProducerType clipType() const;
     /** @brief Sets the timeline clip status (video / audio only) */
-    bool setClipState(PlaylistState::ClipState state);
+    bool setClipState(PlaylistState::ClipState state, Fun &undo, Fun &redo);
 
+protected:
+    // helper fuctions that creates the lambda
+    Fun setClipState_lambda(PlaylistState::ClipState state);
+
+public:
     /* @brief returns the length of the item on the timeline
      */
     int getPlaytime() const override;
@@ -136,14 +151,18 @@ protected:
      */
     void setTimelineEffectsEnabled(bool enabled);
 
-    /* @brief This functions should be called when the producer of the binClip changes, to allow refresh */
-    void refreshProducerFromBin(PlaylistState::ClipState state);
+    /* @brief This functions should be called when the producer of the binClip changes, to allow refresh
+     * @param state corresponds to the state of the clip we want (audio or video)
+     * @param speed corresponds to the speed we need. Leave to 0 to keep current speed. Warning: this function doesn't notify the model. Unless you know what
+     * you are doing, better use useTimewarProducer to change the speed
+     */
+    void refreshProducerFromBin(PlaylistState::ClipState state, double speed = 0);
     void refreshProducerFromBin();
 
     /* @brief This functions replaces the current producer with a slowmotion one
        It also resizes the producer so that set of frames contained in the clip is the same
     */
-    bool useTimewarpProducer(double speed, int extraSpace, Fun &undo, Fun &redo);
+    bool useTimewarpProducer(double speed, Fun &undo, Fun &redo);
     // @brief Lambda that merely changes the speed (in and out are untouched)
     Fun useTimewarpProducer_lambda(double speed);
 
@@ -166,8 +185,11 @@ protected:
     bool forceThumbReload; // Used to trigger a forced thumb reload, when producer changes
 
     PlaylistState::ClipState m_currentState;
+    ClipType::ProducerType m_clipType;
 
     double m_speed = -1; // Speed of the clip
+
+    bool m_canBeVideo, m_canBeAudio;
 };
 
 #endif

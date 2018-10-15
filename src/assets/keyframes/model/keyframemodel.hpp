@@ -103,6 +103,7 @@ public:
        @param old is the position of the keyframe
        @param value is the new value of the param
     */
+    Q_INVOKABLE bool updateKeyframe(int pos, double newVal);
     bool updateKeyframe(GenTime pos, QVariant value);
     bool updateKeyframeType(GenTime pos, int type, Fun &undo, Fun &redo);
     bool updateKeyframe(GenTime pos, QVariant value, Fun &undo, Fun &redo);
@@ -113,7 +114,7 @@ public:
     Keyframe getKeyframe(const GenTime &pos, bool *ok) const;
 
     /* @brief Returns true if we only have 1 keyframe
-    */
+     */
     bool singleKeyframe() const;
     /* @brief Returns the keyframe located after given position.
        If there is a keyframe at given position it is ignored.
@@ -173,9 +174,11 @@ protected:
         |= represents a discrete keyframe, = a linear one and ~= a Catmull-Rom spline
     */
     QString getAnimProperty() const;
+    QString getRotoProperty() const;
 
     /* @brief this function does the opposite: given a MLT representation of an animation, build the corresponding model */
     void parseAnimProperty(const QString &prop);
+    void parseRotoProperty(const QString &prop);
 
 private:
     std::weak_ptr<AssetParameterModel> m_model;

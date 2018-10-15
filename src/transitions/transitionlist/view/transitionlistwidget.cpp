@@ -20,19 +20,22 @@
  ***************************************************************************/
 
 #include "transitionlistwidget.hpp"
+#include "transitions/transitionlist/model/transitionfilter.hpp"
 #include "../model/transitiontreemodel.hpp"
-#include "assets/assetlist/model/assetfilter.hpp"
 #include "transitions/transitionsrepository.hpp"
+#include "effectslist/initeffects.h"
+#include "dialogs/profilesdialog.h"
 
 #include <QQmlContext>
+#include <kns3/downloaddialog.h>
 
 TransitionListWidget::TransitionListWidget(QWidget *parent)
     : AssetListWidget(parent)
 {
 
-    m_model = TransitionTreeModel::construct(false, this);
+    m_model = TransitionTreeModel::construct(true, this);
 
-    m_proxyModel.reset(new AssetFilter(this));
+    m_proxyModel.reset(new TransitionFilter(this));
     m_proxyModel->setSourceModel(m_model.get());
     m_proxyModel->setSortRole(AssetTreeModel::NameRole);
     m_proxyModel->sort(0, Qt::AscendingOrder);
@@ -58,4 +61,44 @@ QString TransitionListWidget::getMimeType(const QString &assetId) const
         return QStringLiteral("kdenlive/composition");
     }
     return QStringLiteral("kdenlive/transition");
+}
+
+void TransitionListWidget::updateFavorite(const QModelIndex &index)
+{
+    m_proxyModel->dataChanged(index, index, QVector<int>());
+    m_proxyModel->reloadFilterOnFavorite();
+    emit reloadFavorites();
+}
+
+void TransitionListWidget::setFilterType(const QString &type)
+{
+    if (type == "favorites") {
+        static_cast<TransitionFilter *>(m_proxyModel.get())->setFilterType(true, TransitionType::Favorites);
+    } else {
+        static_cast<TransitionFilter *>(m_proxyModel.get())->setFilterType(false, TransitionType::Favorites);
+    }
+}
+
+int TransitionListWidget::getNewStuff(const QString &configFile)
+{
+    KNS3::Entry::List entries;
+    QPointer<KNS3::DownloadDialog> dialog = new KNS3::DownloadDialog(configFile);
+    if (dialog->exec() != 0) {
+        entries = dialog->changedEntries();
+    }
+    for (const KNS3::Entry &entry : entries) {
+        if (entry.status() == KNS3::Entry::Installed) {
+            qCDebug(KDENLIVE_LOG) << "// Installed files: " << entry.installedFiles();
+        }
+    }
+    delete dialog;
+    return entries.size();
+}
+
+void TransitionListWidget::downloadNewLumas()
+{
+    if (getNewStuff(QStringLiteral(":data/kdenlive_wipes.knsrc")) > 0) {
+        initEffects::refreshLumas();
+        // TODO: refresh currently displayd trans ?
+    }
 }

@@ -71,7 +71,7 @@ QStringList ClipCreationDialog::getExtensions()
               << QStringLiteral("video/3gpp") << QStringLiteral("video/mp2t");
 
     // Audio MIMEs
-    mimeTypes << QStringLiteral("audio/x-flac") << QStringLiteral("audio/x-matroska") << QStringLiteral("audio/mp4") << QStringLiteral("audio/mpeg")
+    mimeTypes << QStringLiteral("audio/AMR") << QStringLiteral("audio/x-flac") << QStringLiteral("audio/x-matroska") << QStringLiteral("audio/mp4") << QStringLiteral("audio/mpeg")
               << QStringLiteral("audio/x-mp3") << QStringLiteral("audio/ogg") << QStringLiteral("audio/x-wav") << QStringLiteral("audio/x-aiff")
               << QStringLiteral("audio/aiff") << QStringLiteral("application/ogg") << QStringLiteral("application/mxf")
               << QStringLiteral("application/x-shockwave-flash") << QStringLiteral("audio/ac3");
@@ -177,7 +177,7 @@ void ClipCreationDialog::createQTextClip(KdenliveDoc *doc, const QString &parent
         QDomElement prod = xml.createElement(QStringLiteral("producer"));
         xml.appendChild(prod);
         prod.setAttribute(QStringLiteral("type"), (int)ClipType::QText);
-        int id = bin->getFreeClipId();
+        int id = pCore->projectItemModel()->getFreeClipId();
         prod.setAttribute(QStringLiteral("id"), QString::number(id));
 
         prod.setAttribute(QStringLiteral("in"), QStringLiteral("0"));
@@ -255,7 +255,8 @@ void ClipCreationDialog::createTitleClip(KdenliveDoc *doc, const QString &parent
     // Make sure the titles folder exists
     QDir dir(doc->projectDataFolder() + QStringLiteral("/titles"));
     dir.mkpath(QStringLiteral("."));
-    QPointer<TitleWidget> dia_ui = new TitleWidget(QUrl::fromLocalFile(templatePath), doc->timecode(), dir.absolutePath(), pCore->getMonitor(Kdenlive::ProjectMonitor), pCore->bin());
+    QPointer<TitleWidget> dia_ui =
+        new TitleWidget(QUrl::fromLocalFile(templatePath), doc->timecode(), dir.absolutePath(), pCore->getMonitor(Kdenlive::ProjectMonitor), pCore->bin());
     QObject::connect(dia_ui.data(), &TitleWidget::requestBackgroundFrame, pCore->bin(), &Bin::slotGetCurrentProjectImage);
     if (dia_ui->exec() == QDialog::Accepted) {
         // Ready, create clip xml

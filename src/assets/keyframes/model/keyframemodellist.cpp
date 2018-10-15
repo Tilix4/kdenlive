@@ -39,6 +39,14 @@ KeyframeModelList::KeyframeModelList(std::weak_ptr<AssetParameterModel> model, c
     connect(m_parameters.begin()->second.get(), &KeyframeModel::modelChanged, this, &KeyframeModelList::modelChanged);
 }
 
+ObjectId KeyframeModelList::getOwnerId() const
+{
+    if (auto ptr = m_model.lock()) {
+        return ptr->getOwnerId();
+    }
+    return ObjectId();
+}
+
 void KeyframeModelList::addParameter(const QModelIndex &index)
 {
     std::shared_ptr<KeyframeModel> parameter(new KeyframeModel(m_model, index, m_undoStack));
@@ -166,6 +174,12 @@ bool KeyframeModelList::singleKeyframe() const
     return m_parameters.begin()->second->singleKeyframe();
 }
 
+bool KeyframeModelList::isEmpty() const
+{
+    READ_LOCK();
+    return (m_parameters.size() == 0 || m_parameters.begin()->second->rowCount() == 0);
+}
+
 Keyframe KeyframeModelList::getNextKeyframe(const GenTime &pos, bool *ok) const
 {
     READ_LOCK();
@@ -215,4 +229,40 @@ KeyframeModel *KeyframeModelList::getKeyModel()
         return m_parameters.begin()->second.get();
     }
     return nullptr;
+}
+
+void KeyframeModelList::resizeKeyframes(int oldIn, int oldOut, int in, int out, Fun &undo, Fun &redo)
+{
+    bool ok;
+    bool ok2;
+    if (oldOut != out) {
+        GenTime old_out(oldOut, pCore->getCurrentFps());
+        GenTime new_out(out, pCore->getCurrentFps());
+        Keyframe kf = getKeyframe(old_out, &ok);
+        KeyframeType type = kf.second;
+        getKeyframe(new_out, &ok2);
+        // Check keyframes after last position
+        bool ok3;
+        Keyframe toDel = getNextKeyframe(new_out, &ok3);
+        QList <GenTime>positions;
+        if (ok && !ok2) {
+            positions << old_out;
+        }
+        while (ok3) {
+            if (! positions.contains(toDel.first)) {
+                positions << toDel.first;
+            }
+            toDel = getNextKeyframe(toDel.first, &ok3);
+        }
+        //qDebug()<<"/// \n\nKEYS TO DELETE: "<<positions<<"\n------------------------";
+        for (const auto &param : m_parameters) {
+            if (ok && !ok2) {
+                QVariant value = param.second->getInterpolatedValue(new_out);
+                param.second->addKeyframe(new_out, type, value, true, undo, redo);
+            }
+            for (auto frame : positions) {
+                param.second->removeKeyframe(frame, undo, redo);
+            }
+        }
+    }
 }

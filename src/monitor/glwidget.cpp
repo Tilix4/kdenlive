@@ -21,6 +21,8 @@
  */
 
 #include <KMessageBox>
+#include <KDeclarative/KDeclarative>
+#include <kdeclarative_version.h>
 #include <QApplication>
 #include <QOpenGLFunctions_3_2_Core>
 #include <QPainter>
@@ -31,7 +33,7 @@
 #include "core.h"
 #include "glwidget.h"
 #include "kdenlivesettings.h"
-#include "mltcontroller/bincontroller.h"
+#include "monitorproxy.h"
 #include "profiles/profilemodel.hpp"
 #include "qml/qmlaudiothumb.h"
 #include "timeline2/view/qml/timelineitems.h"
@@ -52,7 +54,7 @@
 #else
 #define check_error(fn)                                                                                                                                        \
     {                                                                                                                                                          \
-        uint err = fn->glGetError();                                                                                                                            \
+        uint err = fn->glGetError();                                                                                                                           \
         if (err != GL_NO_ERROR) {                                                                                                                              \
             qCCritical(KDENLIVE_LOG) << "GL error" << hex << err << dec << "at" << __FILE__ << ":" << __LINE__;                                                \
         }                                                                                                                                                      \
@@ -70,8 +72,6 @@ static ClientWaitSync_fp ClientWaitSync = nullptr;
 
 using namespace Mlt;
 
-#define SEEK_INACTIVE (-1)
-
 GLWidget::GLWidget(int id, QObject *parent)
     : QQuickView((QWindow *)parent)
     , sendFrameForAnalysis(false)
@@ -79,6 +79,7 @@ GLWidget::GLWidget(int id, QObject *parent)
     , m_consumer(nullptr)
     , m_producer(nullptr)
     , m_id(id)
+    , m_rulerHeight(QFontMetrics(QApplication::font()).lineSpacing() * 0.7)
     , m_shader(nullptr)
     , m_initSem(0)
     , m_analyseSem(1)
@@ -104,6 +105,15 @@ GLWidget::GLWidget(int id, QObject *parent)
     , m_audioWaveDisplayed(false)
     , m_fbo(nullptr)
 {
+    KDeclarative::KDeclarative kdeclarative;
+    kdeclarative.setDeclarativeEngine(engine());
+#if KDECLARATIVE_VERSION >= QT_VERSION_CHECK(5, 45, 0)
+    kdeclarative.setupEngine(engine());
+    kdeclarative.setupContext();
+#else
+    kdeclarative.setupBindings();
+#endif
+
     m_texture[0] = m_texture[1] = m_texture[2] = 0;
     qRegisterMetaType<Mlt::Frame>("Mlt::Frame");
     qRegisterMetaType<SharedFrame>("SharedFrame");
@@ -113,6 +123,9 @@ GLWidget::GLWidget(int id, QObject *parent)
     setPersistentSceneGraph(true);
     setClearBeforeRendering(false);
     setResizeMode(QQuickView::SizeRootObjectToView);
+
+    m_offscreenSurface.setFormat(QWindow::format());
+    m_offscreenSurface.create();
 
     m_monitorProfile = new Mlt::Profile();
     m_refreshTimer.setSingleShot(true);
@@ -176,11 +189,7 @@ void GLWidget::updateAudioForAnalysis()
 void GLWidget::initializeGL()
 {
     if (m_isInitialized || !isVisible() || (openglContext() == nullptr)) return;
-    if (!m_offscreenSurface.isValid()) {
-        m_offscreenSurface.setFormat(openglContext()->format());
-        m_offscreenSurface.create();
-        openglContext()->makeCurrent(this);
-    }
+    openglContext()->makeCurrent(&m_offscreenSurface);
     initializeOpenGLFunctions();
     qCDebug(KDENLIVE_LOG) << "OpenGL vendor: " << QString::fromUtf8((const char *)glGetString(GL_VENDOR));
     qCDebug(KDENLIVE_LOG) << "OpenGL renderer: " << QString::fromUtf8((const char *)glGetString(GL_RENDERER));
@@ -245,7 +254,7 @@ void GLWidget::initializeGL()
 void GLWidget::resizeGL(int width, int height)
 {
     int x, y, w, h;
-    height -= m_proxy->rulerHeight();
+    height -= m_rulerHeight;
     double this_aspect = (double)width / height;
     double video_aspect = m_monitorProfile->dar();
 
@@ -285,8 +294,8 @@ void GLWidget::resizeGL(int width, int height)
 
 void GLWidget::resizeEvent(QResizeEvent *event)
 {
-    QQuickView::resizeEvent(event);
     resizeGL(event->size().width(), event->size().height());
+    QQuickView::resizeEvent(event);
 }
 
 void GLWidget::createShader()
@@ -420,7 +429,7 @@ void GLWidget::paintGL()
     f->glDisable(GL_BLEND);
     f->glDisable(GL_DEPTH_TEST);
     f->glDepthMask(GL_FALSE);
-    f->glViewport(0, 0, width, height);
+    f->glViewport(0, (m_rulerHeight * devicePixelRatio() * 0.5 + 0.5), width, height);
     check_error(f);
     QColor color(KdenliveSettings::window_background());
     f->glClearColor(color.redF(), color.greenF(), color.blueF(), color.alphaF());
@@ -486,10 +495,10 @@ void GLWidget::paintGL()
     QVector<QVector2D> vertices;
     width = m_rect.width() * devicePixelRatio();
     height = m_rect.height() * devicePixelRatio();
-    vertices << QVector2D(float(-width) / 2.0f, float(-height) / 2.0f + m_proxy->rulerHeight());
-    vertices << QVector2D(float(-width) / 2.0f, float(height) / 2.0f + m_proxy->rulerHeight());
-    vertices << QVector2D(float(width) / 2.0f, float(-height) / 2.0f + m_proxy->rulerHeight());
-    vertices << QVector2D(float(width) / 2.0f, float(height) / 2.0f + m_proxy->rulerHeight());
+    vertices << QVector2D(float(-width) / 2.0f, float(-height) / 2.0f);
+    vertices << QVector2D(float(-width) / 2.0f, float(height) / 2.0f);
+    vertices << QVector2D(float(width) / 2.0f, float(-height) / 2.0f);
+    vertices << QVector2D(float(width) / 2.0f, float(height) / 2.0f);
     m_shader->enableAttributeArray(m_vertexLocation);
     check_error(f);
     m_shader->setAttributeArray(m_vertexLocation, vertices.constData());
@@ -554,43 +563,34 @@ void GLWidget::paintGL()
     }
 }
 
-void GLWidget::slotZoomScene(double value)
+void GLWidget::slotZoom(bool zoomIn)
 {
-    int val = value;
-    if (val >= 3) {
-        setZoom(value - 2.0f);
-    } else if (val == 2) {
-        setZoom(0.5);
-    } else if (val == 1) {
-        setZoom(0.25);
-    } else if (val == 0) {
-        setZoom(0.125);
+    if (zoomIn) {
+        if (qFuzzyCompare(m_zoom, 1.0f)) {
+            setZoom(2.0f);
+        } else if (qFuzzyCompare(m_zoom, 2.0f)) {
+            setZoom(3.0f);
+        } else if (m_zoom < 1.0f) {
+            setZoom(m_zoom * 2);
+        }
+    } else {
+        if (qFuzzyCompare(m_zoom, 3.0f)) {
+            setZoom(2.0);
+        } else if (qFuzzyCompare(m_zoom, 2.0f)) {
+            setZoom(1.0);
+        } else if (m_zoom > 0.2) {
+            setZoom(m_zoom / 2);
+        }
     }
 }
 
 void GLWidget::wheelEvent(QWheelEvent *event)
 {
     if (((event->modifiers() & Qt::ControlModifier) != 0u) && ((event->modifiers() & Qt::ShiftModifier) != 0u)) {
-        if (event->delta() > 0) {
-            if (qFuzzyCompare(m_zoom, 1.0f)) {
-                setZoom(2.0f);
-            } else if (qFuzzyCompare(m_zoom, 2.0f)) {
-                setZoom(3.0f);
-            } else if (m_zoom < 1.0f) {
-                setZoom(m_zoom * 2);
-            }
-        } else {
-            if (qFuzzyCompare(m_zoom, 3.0f)) {
-                setZoom(2.0);
-            } else if (qFuzzyCompare(m_zoom, 2.0f)) {
-                setZoom(1.0);
-            } else if (m_zoom > 0.2) {
-                setZoom(m_zoom / 2);
-            }
-        }
+        slotZoom(event->delta() > 0);
         return;
     }
-    emit mouseSeek(event->delta(), (uint)event->modifiers());
+    emit mouseSeek(-event->delta(), (uint)event->modifiers());
     event->accept();
 }
 
@@ -599,7 +599,7 @@ void GLWidget::requestSeek()
     if (m_producer == nullptr) {
         return;
     }
-    if (m_proxy->seekPosition() != SEEK_INACTIVE) {
+    if (m_proxy->seeking()) {
         if (!qFuzzyIsNull(m_producer->get_speed())) {
             m_consumer->purge();
         }
@@ -614,7 +614,7 @@ void GLWidget::requestSeek()
 void GLWidget::seek(int pos)
 {
     // Testing puspose only
-    if (m_proxy->seekPosition() == SEEK_INACTIVE) {
+    if (!m_proxy->seeking()) {
         m_proxy->setSeekPosition(pos);
         if (!qFuzzyIsNull(m_producer->get_speed())) {
             m_consumer->purge();
@@ -636,6 +636,11 @@ void GLWidget::requestRefresh()
     }
 }
 
+QString GLWidget::frameToTime(int frames) const
+{
+    return m_consumer ? m_consumer->frames_to_time(frames, mlt_time_smpte_df) : QStringLiteral("-");
+}
+
 void GLWidget::refresh()
 {
     m_refreshTimer.stop();
@@ -646,17 +651,18 @@ void GLWidget::refresh()
     m_consumer->set("refresh", 1);
 }
 
-bool GLWidget::checkFrameNumber(int pos)
+bool GLWidget::checkFrameNumber(int pos, int offset)
 {
-    emit seekPosition(pos);
-    //TODO: cleanup and move logic to proper proxy class
-    m_proxy->setPosition(pos);
-    if (pos == m_proxy->seekPosition()) {
-        m_proxy->setSeekPosition(SEEK_INACTIVE);
+    emit consumerPosition(pos);
+    // TODO: cleanup and move logic to proper proxy class
+    bool seekStoped = false;
+    m_proxy->setPosition(pos, &seekStoped);
+    emit seekPosition(m_proxy->seekOrCurrentPosition());
+    if (seekStoped) {
         return true;
     }
     const double speed = m_producer->get_speed();
-    if (m_proxy->seekPosition() != SEEK_INACTIVE) {
+    if (m_proxy->seeking()) {
         m_producer->set_speed(0);
         m_producer->seek(m_proxy->seekPosition());
         if (qFuzzyIsNull(speed)) {
@@ -666,7 +672,7 @@ bool GLWidget::checkFrameNumber(int pos)
         }
     } else if (qFuzzyIsNull(speed)) {
         if (m_isLoopMode) {
-            if (pos >= m_producer->get_int("out") - 1) {
+            if (pos >= m_producer->get_int("out") - offset) {
                 m_consumer->purge();
                 m_producer->seek(m_proxy->zoneIn());
                 m_producer->set_speed(1.0);
@@ -674,7 +680,10 @@ bool GLWidget::checkFrameNumber(int pos)
             }
             return true;
         } else {
-            return pos < m_producer->get_int("out") - 1.;
+            if (pos >= m_producer->get_int("out") - offset) {
+                return false;
+            }
+            return true;
         }
     } else if (speed < 0. && pos <= 0) {
         m_producer->set_speed(0);
@@ -872,6 +881,7 @@ int GLWidget::setProducer(Mlt::Producer *producer, bool isActive, int position)
         m_producer->set_speed(0);
         if (m_consumer) {
             consumerPosition = m_consumer->position();
+            m_consumer->stop();
             if (!m_consumer->is_stopped()) {
                 m_consumer->stop();
             }
@@ -919,7 +929,8 @@ int GLWidget::setProducer(Mlt::Producer *producer, bool isActive, int position)
         startConsumer();
     }
     // emit durationChanged(m_producer->get_length() - 1, m_producer->get_in());
-    m_proxy->setPosition(m_producer->position());
+    bool ok;
+    m_proxy->setPosition(m_producer->position(), &ok);
     return error;
 }
 
@@ -1112,13 +1123,17 @@ int GLWidget::reconfigure(Mlt::Profile *profile)
             m_consumer->purge();
             m_consumer->stop();
             delete m_consumer;
+            m_consumer = nullptr;
         }
-        QString audioBackend = KdenliveSettings::audiobackend();
+        QString audioBackend = (KdenliveSettings::external_display()) ? QString("decklink:%1").arg(KdenliveSettings::blackmagic_output_device()) : KdenliveSettings::audiobackend();
         if (serviceName.isEmpty() || serviceName != audioBackend) {
             m_consumer = new Mlt::FilteredConsumer(*m_monitorProfile, audioBackend.toLatin1().constData());
             if (m_consumer->is_valid()) {
                 serviceName = audioBackend;
                 setProperty("mlt_service", serviceName);
+                if (KdenliveSettings::external_display()) {
+                    m_consumer->set("terminate_on_pause", 0);
+                }
             } else {
                 // Warning, audio backend unavailable on system
                 delete m_consumer;
@@ -1135,7 +1150,7 @@ int GLWidget::reconfigure(Mlt::Profile *profile)
                             // switch sdl audio backend
                             KdenliveSettings::setSdlAudioBackend(bk);
                         }
-                        qDebug()<<"++++++++\nSwitching audio backend to: "<<bk<<"\n++++++++++";
+                        qDebug() << "++++++++\nSwitching audio backend to: " << bk << "\n++++++++++";
                         KdenliveSettings::setAudiobackend(bk);
                         serviceName = bk;
                         setProperty("mlt_service", serviceName);
@@ -1167,7 +1182,7 @@ int GLWidget::reconfigure(Mlt::Profile *profile)
         // Connect the producer to the consumer - tell it to "run" later
         if (m_producer) {
             m_consumer->connect(*m_producer);
-            //m_producer->set_speed(0.0);
+            // m_producer->set_speed(0.0);
         }
         int dropFrames = realTime();
         if (!KdenliveSettings::monitor_dropframes()) {
@@ -1213,11 +1228,13 @@ int GLWidget::reconfigure(Mlt::Profile *profile)
         // m_consumer->set("progressive", 1);
         m_consumer->set("rescale", KdenliveSettings::mltinterpolation().toUtf8().constData());
         m_consumer->set("deinterlace_method", KdenliveSettings::mltdeinterlacer().toUtf8().constData());
+        /*
 #ifdef Q_OS_WIN
-            m_consumer->set("audio_buffer", 2048);
+        m_consumer->set("audio_buffer", 2048);
 #else
-            m_consumer->set("audio_buffer", 512);
+        m_consumer->set("audio_buffer", 512);
 #endif
+        */
         m_consumer->set("buffer", 25);
         m_consumer->set("prefill", 1);
         m_consumer->set("scrub_audio", 1);
@@ -1278,7 +1295,7 @@ QRect GLWidget::displayRect() const
 QPoint GLWidget::offset() const
 {
     return QPoint(m_offset.x() - ((int)((float)m_monitorProfile->width() * m_zoom) - width()) / 2,
-                            m_offset.y() - ((int)((float)m_monitorProfile->height() * m_zoom) - height()) / 2);
+                  m_offset.y() - ((int)((float)m_monitorProfile->height() * m_zoom) - height()) / 2);
 }
 
 void GLWidget::setZoom(float zoom)
@@ -1370,11 +1387,22 @@ void GLWidget::updateGamma()
     reconfigure();
 }
 
+void GLWidget::resetConsumer(bool fullReset)
+{
+    if (fullReset && m_consumer) {
+        m_consumer->purge();
+        m_consumer->stop();
+        delete m_consumer;
+        m_consumer = nullptr;
+    }
+    reconfigure();
+}
+
 const QString GLWidget::sceneList(const QString &root, const QString &fullPath)
 {
     QString playlist;
     qCDebug(KDENLIVE_LOG) << " * * *Setting document xml root: " << root;
-    Mlt::Consumer xmlConsumer(*m_monitorProfile, fullPath.isEmpty() ? "xml:kdenlive_playlist" : fullPath.toUtf8().constData());
+    Mlt::Consumer xmlConsumer(*m_monitorProfile, "xml", fullPath.isEmpty() ? "kdenlive_playlist" : fullPath.toUtf8().constData());
     if (!root.isEmpty()) {
         xmlConsumer.set("root", root.toUtf8().constData());
     }
@@ -1671,15 +1699,14 @@ void GLWidget::refreshSceneLayout()
     }
     rootObject()->setProperty("profile", QPoint(m_monitorProfile->width(), m_monitorProfile->height()));
     rootObject()->setProperty("scalex", (double)m_rect.width() / m_monitorProfile->width() * m_zoom);
-    rootObject()->setProperty("scaley",
-                              (double)m_rect.width() / (((double)m_monitorProfile->height() * m_monitorProfile->dar() / m_monitorProfile->width())) /
-                                  m_monitorProfile->width() * m_zoom);
+    rootObject()->setProperty("scaley", (double)m_rect.width() / (((double)m_monitorProfile->height() * m_monitorProfile->dar() / m_monitorProfile->width())) /
+                                            m_monitorProfile->width() * m_zoom);
 }
 
 void GLWidget::switchPlay(bool play, double speed)
 {
     // QMutexLocker locker(&m_mutex);
-    m_proxy->setSeekPosition(SEEK_INACTIVE);
+    m_proxy->setSeekPosition(-1);
     if ((m_producer == nullptr) || (m_consumer == nullptr)) {
         return;
     }
@@ -1688,9 +1715,9 @@ void GLWidget::switchPlay(bool play, double speed)
     }
     if (play) {
         double currentSpeed = m_producer->get_speed();
-        /*if (m_name == Kdenlive::ClipMonitor && m_consumer->position() == m_producer->get_out()) {
+        if (m_id == Kdenlive::ClipMonitor && m_consumer->position() == m_producer->get_out()) {
             m_producer->seek(0);
-        }*/
+        }
         if (m_consumer->get_int("real_time") != realTime()) {
             m_consumer->set("real_time", realTime());
             m_consumer->set("buffer", 25);
@@ -1708,12 +1735,13 @@ void GLWidget::switchPlay(bool play, double speed)
         }
         m_producer->set_speed(speed);
     } else {
+        m_consumer->set("refresh", 0);
+        m_producer->set_speed(0.0);
         m_consumer->set("real_time", -1);
         m_consumer->set("buffer", 0);
         m_consumer->set("prefill", 0);
-        m_producer->set_speed(0.0);
-        m_producer->seek(m_consumer->position() + 1);
         m_consumer->purge();
+        m_producer->seek(m_consumer->position() + 1);
     }
 }
 
@@ -1722,7 +1750,7 @@ bool GLWidget::playZone(bool loop)
     if (!m_producer) {
         return false;
     }
-    m_proxy->setSeekPosition(SEEK_INACTIVE);
+    m_proxy->setSeekPosition(-1);
     m_producer->seek(m_proxy->zoneIn());
     m_producer->set_speed(0);
     m_consumer->purge();
@@ -1742,7 +1770,7 @@ bool GLWidget::loopClip()
     if (!m_producer) {
         return false;
     }
-    m_proxy->setSeekPosition(SEEK_INACTIVE);
+    m_proxy->setSeekPosition(-1);
     m_producer->seek(0);
     m_producer->set_speed(0);
     m_consumer->purge();
@@ -1774,7 +1802,7 @@ MonitorProxy *GLWidget::getControllerProxy()
 
 int GLWidget::getCurrentPos() const
 {
-    return m_proxy->seekPosition() == SEEK_INACTIVE ? m_consumer->position() : m_proxy->seekPosition();
+    return m_proxy->seeking() ? m_proxy->seekPosition() : m_consumer->position();
 }
 
 void GLWidget::setRulerInfo(int duration, std::shared_ptr<MarkerListModel> model)
@@ -1782,7 +1810,6 @@ void GLWidget::setRulerInfo(int duration, std::shared_ptr<MarkerListModel> model
     rootObject()->setProperty("duration", duration);
     if (model != nullptr) {
         // we are resetting marker/snap model, reset zone
-        m_proxy->resetZone();
         rootContext()->setContextProperty("markersModel", model.get());
     }
 }
@@ -1811,7 +1838,7 @@ void GLWidget::startConsumer()
 void GLWidget::stop()
 {
     m_refreshTimer.stop();
-    m_proxy->setSeekPosition(SEEK_INACTIVE);
+    m_proxy->setSeekPosition(-1);
     QMutexLocker locker(&m_mutex);
     if (m_producer) {
         if (m_isZoneMode) {
@@ -1879,4 +1906,15 @@ int GLWidget::duration() const
         return 0;
     }
     return m_producer->get_playtime();
+}
+
+void GLWidget::setConsumerProperty(const QString &name, const QString &value)
+{
+    QMutexLocker locker(&m_mutex);
+    if (m_consumer) {
+        m_consumer->set(name.toUtf8().constData(), value.toUtf8().constData());
+        if (m_consumer->start() == -1) {
+            qCWarning(KDENLIVE_LOG) << "ERROR, Cannot start monitor";
+        }
+    }
 }

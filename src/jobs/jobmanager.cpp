@@ -21,12 +21,14 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
 #include "jobmanager.h"
-#include "bin/projectitemmodel.h"
 #include "bin/abstractprojectitem.h"
+#include "bin/projectclip.h"
+#include "bin/projectitemmodel.h"
 #include "core.h"
 #include "macros.hpp"
 #include "undohelper.hpp"
 
+#include <KMessageWidget>
 #include <QFuture>
 #include <QFutureWatcher>
 #include <QThread>
@@ -99,6 +101,9 @@ void JobManager::discardJobs(const QString &binId, AbstractClipJob::JOBTYPE type
     }
     for (int jobId : m_jobsByClip.at(binId)) {
         if (type == AbstractClipJob::NOJOBTYPE || m_jobs.at(jobId)->m_type == type) {
+            for (std::shared_ptr<AbstractClipJob>job : m_jobs.at(jobId)->m_job) {
+                job->jobCanceled();
+            }
             m_jobs.at(jobId)->m_future.cancel();
         }
     }
@@ -182,6 +187,9 @@ void JobManager::slotDiscardClipJobs(const QString &binId)
     if (m_jobsByClip.count(binId) > 0) {
         for (int jobId : m_jobsByClip.at(binId)) {
             Q_ASSERT(m_jobs.count(jobId) > 0);
+            for (std::shared_ptr<AbstractClipJob>job : m_jobs.at(jobId)->m_job) {
+                job->jobCanceled();
+            }
             m_jobs[jobId]->m_future.cancel();
         }
     }
@@ -192,6 +200,9 @@ void JobManager::slotCancelPendingJobs()
     QWriteLocker locker(&m_lock);
     for (const auto &j : m_jobs) {
         if (!j.second->m_future.isStarted()) {
+            for (std::shared_ptr<AbstractClipJob>job : j.second->m_job) {
+                job->jobCanceled();
+            }
             j.second->m_future.cancel();
         }
     }
@@ -201,6 +212,9 @@ void JobManager::slotCancelJobs()
 {
     QWriteLocker locker(&m_lock);
     for (const auto &j : m_jobs) {
+        for (std::shared_ptr<AbstractClipJob>job : j.second->m_job) {
+                job->jobCanceled();
+            }
         j.second->m_future.cancel();
     }
 }
@@ -266,7 +280,7 @@ void JobManager::slotManageCanceledJob(int id)
     for (const auto &it : m_jobs[id]->m_indices) {
         pCore->projectItemModel()->onItemUpdated(it.first, AbstractProjectItem::JobStatus);
     }
-    //TODO: delete child jobs
+    // TODO: delete child jobs
     updateJobCount();
 }
 void JobManager::slotManageFinishedJob(int id)
@@ -284,22 +298,58 @@ void JobManager::slotManageFinishedJob(int id)
     for (bool res : m_jobs[id]->m_future.future()) {
         ok = ok && res;
     }
+    Fun undo = []() { return true; };
+    Fun redo = []() { return true; };
     if (!ok) {
-        qDebug()<<" * * * ** * * *\nWARNING + + +\nJOB NOT CORRECT FINISH: "<<id<<"\n------------------------";
-        //TODO: delete child jobs
+        qDebug() << " * * * ** * * *\nWARNING + + +\nJOB NOT CORRECT FINISH: " << id << "\n------------------------";
+        // TODO: delete child jobs
         m_jobs[id]->m_completionMutex.unlock();
+        locker.unlock();
+        if (m_jobs.at(id)->m_type == AbstractClipJob::LOADJOB) {
+            // loading failed, remove clip
+            for (const auto &it : m_jobs[id]->m_indices) {
+                std::shared_ptr<AbstractProjectItem> item = pCore->projectItemModel()->getItemByBinId(it.first);
+                if (item && item->itemType() == AbstractProjectItem::ClipItem) {
+                    auto clipItem = std::static_pointer_cast<ProjectClip>(item);
+                    if (!clipItem->isReady()) {
+                        // We were trying to load a new clip, delete it
+                        pCore->projectItemModel()->requestBinClipDeletion(item, undo, redo);
+                    }
+                }
+            }
+        } else {
+            QString bid;
+            for (const auto &it : m_jobs.at(id)->m_indices) {
+                bid = it.first;
+                break;
+            }
+            QString message = getJobMessageForClip(id, bid);
+            if (!message.isEmpty()) {
+                pCore->displayBinMessage(message, KMessageWidget::Warning);
+            }
+        }
         updateJobCount();
         return;
     }
-    Fun undo = []() { return true; };
-    Fun redo = []() { return true; };
+    // unlock mutex to allow further processing
+    // TODO: the lock mechanism should handle this better!
+    locker.unlock();
     for (const auto &j : m_jobs[id]->m_job) {
         ok = ok && j->commitResult(undo, redo);
     }
     m_jobs[id]->m_processed = true;
     if (!ok) {
-        qDebug() << "ERROR: Job " << id << " failed";
         m_jobs[id]->m_failed = true;
+        QString bid;
+        for (const auto &it : m_jobs.at(id)->m_indices) {
+            bid = it.first;
+            break;
+        }
+        qDebug() << "ERROR: Job " << id << " failed, BID: "<<bid;
+        QString message = getJobMessageForClip(id, bid);
+        if (!message.isEmpty()) {
+            pCore->displayBinMessage(message, KMessageWidget::Warning);
+        }
     }
     m_jobs[id]->m_completionMutex.unlock();
     if (ok && !m_jobs[id]->m_undoString.isEmpty()) {
@@ -337,6 +387,14 @@ JobManagerStatus JobManager::getJobStatus(int jobId) const
         return JobManagerStatus::Running;
     }
     return JobManagerStatus::Pending;
+}
+
+bool JobManager::jobSucceded(int jobId) const
+{
+    READ_LOCK();
+    Q_ASSERT(m_jobs.count(jobId) > 0);
+    auto job = m_jobs.at(jobId);
+    return !job->m_failed;
 }
 
 int JobManager::getJobProgressForClip(int jobId, const QString &binId) const

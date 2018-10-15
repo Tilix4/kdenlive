@@ -48,6 +48,9 @@ ClipModel::ClipModel(std::shared_ptr<TimelineModel> parent, std::shared_ptr<Mlt:
     m_producer->set("kdenlive:id", binClipId.toUtf8().constData());
     m_producer->set("_kdenlive_cid", m_id);
     std::shared_ptr<ProjectClip> binClip = pCore->projectItemModel()->getClipByBinID(m_binClipId);
+    m_canBeVideo = binClip->hasVideo();
+    m_canBeAudio = binClip->hasAudio();
+    m_clipType = binClip->clipType();
     if (binClip) {
         m_endlessResize = !binClip->hasLimitedDuration();
     } else {
@@ -67,9 +70,8 @@ int ClipModel::construct(const std::shared_ptr<TimelineModel> &parent, const QSt
     state = stateFromBool(videoAudio);
 
     std::shared_ptr<Mlt::Producer> cutProducer = binClip->getTimelineProducer(id, state, 1.);
-
     std::shared_ptr<ClipModel> clip(new ClipModel(parent, cutProducer, binClipId, id, state));
-    clip->setClipState(state);
+    clip->setClipState_lambda(state)();
     parent->registerClip(clip);
     return id;
 }
@@ -82,7 +84,7 @@ int ClipModel::construct(const std::shared_ptr<TimelineModel> &parent, const QSt
     // We might not be able to use directly the producer that we receive as an argument, because it cannot share the same master producer with any other
     // clipModel (due to a mlt limitation, see ProjectClip doc)
 
-    int id = (id == -1 ? TimelineModel::getNextId() : id);
+    int id = TimelineModel::getNextId();
     std::shared_ptr<ProjectClip> binClip = pCore->projectItemModel()->getClipByBinID(binClipId);
 
     // We refine the state according to what the clip can actually produce
@@ -98,9 +100,8 @@ int ClipModel::construct(const std::shared_ptr<TimelineModel> &parent, const QSt
     auto result = binClip->giveMasterAndGetTimelineProducer(id, producer, state);
     std::shared_ptr<ClipModel> clip(new ClipModel(parent, result.first, binClipId, id, state, speed));
     clip->m_effectStack->importEffects(producer, result.second);
-    clip->setClipState(state);
+    clip->setClipState_lambda(state)();
     parent->registerClip(clip);
-
     return id;
 }
 
@@ -124,15 +125,13 @@ ClipModel::~ClipModel() {}
 
 bool ClipModel::requestResize(int size, bool right, Fun &undo, Fun &redo, bool logUndo)
 {
-    qDebug() << "++++++++++ PERFORMAING CLIP RESIZE====";
     QWriteLocker locker(&m_lock);
-    // qDebug() << "RESIZE CLIP" << m_id << "target size=" << size << "right=" << right << "endless=" << m_endlessResize << "total length" <<
-    // m_producer->get_length() << "current length" << getPlaytime();
+    // qDebug() << "RESIZE CLIP" << m_id << "target size=" << size << "right=" << right << "endless=" << m_endlessResize << "length" <<
+    // m_producer->get_length();
     if (!m_endlessResize && (size <= 0 || size > m_producer->get_length())) {
         return false;
     }
-    int oldDuration = getPlaytime();
-    int delta = oldDuration - size;
+    int delta = getPlaytime() - size;
     if (delta == 0) {
         return true;
     }
@@ -167,6 +166,11 @@ bool ClipModel::requestResize(int size, bool right, Fun &undo, Fun &redo, bool l
             qDebug() << "Error : Moving clip failed because parent timeline is not available anymore";
             Q_ASSERT(false);
         }
+    } else {
+        // Ensure producer is long enough
+        if (m_endlessResize && outPoint > m_producer->parent().get_length()) {
+            m_producer->set("length", outPoint + 1);
+        }
     }
     Fun operation = [this, inPoint, outPoint, track_operation]() {
         if (track_operation()) {
@@ -177,9 +181,19 @@ bool ClipModel::requestResize(int size, bool right, Fun &undo, Fun &redo, bool l
     };
     if (operation()) {
         // Now, we are in the state in which the timeline should be when we try to revert current action. So we can build the reverse action from here
-        auto ptr = m_parent.lock();
-        if (m_currentTrackId != -1 && ptr) {
-            track_reverse = ptr->getTrackById(m_currentTrackId)->requestClipResize_lambda(m_id, old_in, old_out, right);
+        if (m_currentTrackId != -1) {
+            QVector<int> roles{TimelineModel::DurationRole};
+            if (!right) {
+                roles.push_back(TimelineModel::StartRole);                roles.push_back(TimelineModel::InPointRole);
+            } else {
+                roles.push_back(TimelineModel::OutPointRole);
+            }
+            if (auto ptr = m_parent.lock()) {
+                QModelIndex ix = ptr->makeClipIndexFromID(m_id);
+                //TODO: integrate in undo
+                ptr->dataChanged(ix, ix, roles);
+                track_reverse = ptr->getTrackById(m_currentTrackId)->requestClipResize_lambda(m_id, old_in, old_out, right);
+            }
         }
         Fun reverse = [this, old_in, old_out, track_reverse]() {
             if (track_reverse()) {
@@ -190,7 +204,7 @@ bool ClipModel::requestResize(int size, bool right, Fun &undo, Fun &redo, bool l
         };
         qDebug() << "// ADJUSTING EFFECT LENGTH, LOGUNDO " << logUndo << ", " << old_in << "/" << inPoint << ", " << m_producer->get_playtime();
         if (logUndo) {
-            adjustEffectLength(right, old_in, inPoint, oldDuration, m_producer->get_playtime(), reverse, operation, logUndo);
+            // adjustEffectLength(right, old_in, inPoint, oldDuration, m_producer->get_playtime(), reverse, operation, logUndo);
         }
         UPDATE_UNDO_REDO(operation, reverse, undo, redo);
         return true;
@@ -255,6 +269,13 @@ void ClipModel::setTimelineEffectsEnabled(bool enabled)
 bool ClipModel::addEffect(const QString &effectId)
 {
     QWriteLocker locker(&m_lock);
+    if (EffectsRepository::get()->getType(effectId) == EffectType::Audio) {
+        if (m_currentState == PlaylistState::VideoOnly) {
+            return false;
+        }
+    } else if (m_currentState == PlaylistState::AudioOnly) {
+        return false;
+    }
     m_effectStack->appendEffect(effectId);
     return true;
 }
@@ -323,11 +344,23 @@ bool ClipModel::isAudioOnly() const
     return m_currentState == PlaylistState::AudioOnly;
 }
 
-void ClipModel::refreshProducerFromBin(PlaylistState::ClipState state)
+void ClipModel::refreshProducerFromBin(PlaylistState::ClipState state, double speed)
 {
+    // We require that the producer is not in the track when we refresh the producer, because otherwise the modification will not be propagated. Remove the clip
+    // first, refresh, and then replant.
+    Q_ASSERT(m_currentTrackId == -1);
     QWriteLocker locker(&m_lock);
     int in = getIn();
     int out = getOut();
+    qDebug() << "refresh " << speed << m_speed << in << out;
+    if (!qFuzzyCompare(speed, m_speed) && !qFuzzyCompare(speed, 0.)) {
+        in = in * m_speed / speed;
+        out = in + getPlaytime() - 1;
+        // prevent going out of the clip's range
+        out = std::min(out, int(double(m_producer->get_length()) * m_speed / speed) - 1);
+        m_speed = speed;
+        qDebug() << "changing speed" << in << out << m_speed;
+    }
     std::shared_ptr<ProjectClip> binClip = pCore->projectItemModel()->getClipByBinID(m_binClipId);
     std::shared_ptr<Mlt::Producer> binProducer = binClip->getTimelineProducer(m_id, state, m_speed);
     m_producer = std::move(binProducer);
@@ -344,30 +377,46 @@ void ClipModel::refreshProducerFromBin()
     refreshProducerFromBin(m_currentState);
 }
 
-bool ClipModel::useTimewarpProducer(double speed, int extraSpace, Fun &undo, Fun &redo)
+bool ClipModel::useTimewarpProducer(double speed, Fun &undo, Fun &redo)
 {
     if (m_endlessResize) {
         // no timewarp for endless producers
         return false;
     }
+    if (qFuzzyCompare(speed, m_speed)) {
+        // nothing to do
+        return true;
+    }
     std::function<bool(void)> local_undo = []() { return true; };
     std::function<bool(void)> local_redo = []() { return true; };
     double previousSpeed = getSpeed();
-    int new_in = int(double(getIn()) * previousSpeed / speed);
-    int new_out = int(double(getOut()) * previousSpeed / speed);
+    int oldDuration = getPlaytime();
+    int newDuration = int(double(oldDuration) * previousSpeed / speed);
+    int oldOut = getOut();
+    int oldIn = getIn();
     auto operation = useTimewarpProducer_lambda(speed);
+    auto reverse = useTimewarpProducer_lambda(previousSpeed);
+    if (oldOut >= newDuration) {
+        // in that case, we are going to shrink the clip when changing the producer. We must undo that when reloading the old producer
+        reverse = [reverse, oldIn, oldOut, this]() {
+            bool res = reverse();
+            if (res) {
+                setInOut(oldIn, oldOut);
+            }
+            return res;
+        };
+    }
     if (operation()) {
-        auto reverse = useTimewarpProducer_lambda(previousSpeed);
         UPDATE_UNDO_REDO(operation, reverse, local_undo, local_redo);
-        bool res = requestResize(new_out - new_in + 1, true, local_undo, local_redo, true);
+        bool res = requestResize(newDuration, true, local_undo, local_redo, true);
         if (!res) {
-            bool undone = local_undo();
-            Q_ASSERT(undone);
+            local_undo();
             return false;
         }
         UPDATE_UNDO_REDO(local_redo, local_undo, undo, redo);
         return true;
     }
+    qDebug() << "tw: operation fail";
     return false;
 }
 
@@ -375,8 +424,12 @@ Fun ClipModel::useTimewarpProducer_lambda(double speed)
 {
     QWriteLocker locker(&m_lock);
     return [speed, this]() {
-        m_speed = speed;
-        refreshProducerFromBin(m_currentState);
+        qDebug() << "timeWarp producer" << speed;
+        refreshProducerFromBin(m_currentState, speed);
+        if (auto ptr = m_parent.lock()) {
+            QModelIndex ix = ptr->makeClipIndexFromID(m_id);
+            ptr->notifyChange(ix, ix, TimelineModel::SpeedRole);
+        }
         return true;
     };
 }
@@ -434,30 +487,68 @@ void ClipModel::setShowKeyframes(bool show)
     service()->set("kdenlive:hide_keyframes", (int)!show);
 }
 
-bool ClipModel::setClipState(PlaylistState::ClipState state)
+Fun ClipModel::setClipState_lambda(PlaylistState::ClipState state)
 {
     QWriteLocker locker(&m_lock);
-    refreshProducerFromBin(state);
-    m_currentState = state;
-    return true;
+    return [this, state]() {
+        if (auto ptr = m_parent.lock()) {
+            switch (state) {
+            case PlaylistState::Disabled:
+                m_producer->set("set.test_audio", 1);
+                m_producer->set("set.test_image", 1);
+                break;
+            case PlaylistState::VideoOnly:
+                m_producer->set("set.test_image", 0);
+                break;
+            case PlaylistState::AudioOnly:
+                m_producer->set("set.test_audio", 0);
+                break;
+            default:
+                // error
+                break;
+            }
+            m_currentState = state;
+            if (ptr->isClip(m_id)) { // if this is false, the clip is being created. Don't update model in that case
+                QModelIndex ix = ptr->makeClipIndexFromID(m_id);
+                ptr->dataChanged(ix, ix, {TimelineModel::StatusRole});
+            }
+            return true;
+        }
+        return false;
+    };
+}
+
+bool ClipModel::setClipState(PlaylistState::ClipState state, Fun &undo, Fun &redo)
+{
+    if (state == PlaylistState::VideoOnly && !canBeVideo()) {
+        return false;
+    }
+    if (state == PlaylistState::AudioOnly && !canBeAudio()) {
+        return false;
+    }
+    if (state == m_currentState) {
+        return true;
+    }
+    auto old_state = m_currentState;
+    auto operation = setClipState_lambda(state);
+    if (operation()) {
+        auto reverse = setClipState_lambda(old_state);
+        UPDATE_UNDO_REDO(operation, reverse, undo, redo);
+        return true;
+    }
+    return false;
 }
 
 PlaylistState::ClipState ClipModel::clipState() const
 {
     READ_LOCK();
     return m_currentState;
-    /*
-    if (service()->parent().get_int("audio_index") == -1) {
-        if (service()->parent().get_int("video_index") == -1) {
-            return PlaylistState::Disabled;
-        } else {
-            return PlaylistState::VideoOnly;
-        }
-    } else if (service()->parent().get_int("video_index") == -1) {
-        return PlaylistState::AudioOnly;
-    }
-    return PlaylistState::Original;
-    */
+}
+
+ClipType::ProducerType ClipModel::clipType() const
+{
+    READ_LOCK();
+    return m_clipType;
 }
 
 void ClipModel::passTimelineProperties(std::shared_ptr<ClipModel> other)
@@ -466,4 +557,20 @@ void ClipModel::passTimelineProperties(std::shared_ptr<ClipModel> other)
     Mlt::Properties source(m_producer->get_properties());
     Mlt::Properties dest(other->service()->get_properties());
     dest.pass_list(source, "kdenlive:hide_keyframes,kdenlive:activeeffect");
+}
+
+bool ClipModel::canBeVideo() const
+{
+    return m_canBeVideo;
+}
+
+bool ClipModel::canBeAudio() const
+{
+    return m_canBeAudio;
+}
+
+const QString ClipModel::effectNames() const
+{
+    READ_LOCK();
+    return m_effectStack->effectNames();
 }

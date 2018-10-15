@@ -20,14 +20,16 @@
 #include "dvdwizardmenu.h"
 
 #include "kdenlivesettings.h"
-#include "utils/KoIconUtils.h"
+
 
 #include "kdenlive_debug.h"
 #include "klocalizedstring.h"
 #include <KColorScheme>
 #include <QGraphicsDropShadowEffect>
-
 #include "doc/kthumb.h"
+
+#include <mlt++/MltProducer.h>
+#include <mlt++/MltProfile.h>
 
 enum { DvdButtonItem = QGraphicsItem::UserType + 1, DvdButtonUnderlineItem = QGraphicsItem::UserType + 2 };
 
@@ -172,10 +174,10 @@ DvdWizardMenu::DvdWizardMenu(DVDFORMAT format, QWidget *parent)
     connect(m_view.create_menu, &QAbstractButton::toggled, m_view.menu_box, &QWidget::setEnabled);
     connect(m_view.create_menu, &QAbstractButton::toggled, this, &QWizardPage::completeChanged);
 
-    m_view.add_button->setIcon(KoIconUtils::themedIcon(QStringLiteral("document-new")));
-    m_view.delete_button->setIcon(KoIconUtils::themedIcon(QStringLiteral("trash-empty")));
-    m_view.zoom_button->setIcon(KoIconUtils::themedIcon(QStringLiteral("zoom-in")));
-    m_view.unzoom_button->setIcon(KoIconUtils::themedIcon(QStringLiteral("zoom-out")));
+    m_view.add_button->setIcon(QIcon::fromTheme(QStringLiteral("document-new")));
+    m_view.delete_button->setIcon(QIcon::fromTheme(QStringLiteral("trash-empty")));
+    m_view.zoom_button->setIcon(QIcon::fromTheme(QStringLiteral("zoom-in")));
+    m_view.unzoom_button->setIcon(QIcon::fromTheme(QStringLiteral("zoom-out")));
 
     m_view.add_button->setToolTip(i18n("Add new button"));
     m_view.delete_button->setToolTip(i18n("Delete current button"));
@@ -233,15 +235,15 @@ DvdWizardMenu::DvdWizardMenu(DVDFORMAT format, QWidget *parent)
     // m_view.menu_preview->resizefitInView(0, 0, m_width, m_height);
 
     connect(m_view.play_text, &QLineEdit::textChanged, this, &DvdWizardMenu::buildButton);
-    connect(m_view.text_color, SIGNAL(changed(QColor)), this, SLOT(updateColor()));
+    connect(m_view.text_color, &KColorButton::changed, this, static_cast<void (DvdWizardMenu::*)(const QColor&)>(&DvdWizardMenu::updateColor));
     connect(m_view.font_size, static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged), this, &DvdWizardMenu::buildButton);
     connect(m_view.font_family, &QFontComboBox::currentFontChanged, this, &DvdWizardMenu::buildButton);
     connect(m_view.background_image, &KUrlRequester::textChanged, this, &DvdWizardMenu::buildImage);
     connect(m_view.background_color, &KColorButton::changed, this, &DvdWizardMenu::buildColor);
 
-    connect(m_view.background_list, SIGNAL(currentIndexChanged(int)), this, SLOT(checkBackgroundType(int)));
+    connect(m_view.background_list, static_cast<void (KComboBox::*)(int)>(&KComboBox::currentIndexChanged), this, &DvdWizardMenu::checkBackgroundType);
 
-    connect(m_view.target_list, SIGNAL(activated(int)), this, SLOT(setButtonTarget(int)));
+    connect(m_view.target_list, static_cast<void (KComboBox::*)(int)>(&KComboBox::activated), this, &DvdWizardMenu::setButtonTarget);
     connect(m_view.back_to_menu, &QAbstractButton::toggled, this, &DvdWizardMenu::setBackToMenu);
 
     connect(m_view.add_button, &QAbstractButton::pressed, this, &DvdWizardMenu::addButton);
@@ -252,7 +254,7 @@ DvdWizardMenu::DvdWizardMenu(DVDFORMAT format, QWidget *parent)
     connect(m_scene, &DvdScene::sceneChanged, this, &QWizardPage::completeChanged);
 
     // red background for error message
-    KColorScheme scheme(palette().currentColorGroup(), KColorScheme::Window, KSharedConfig::openConfig(KdenliveSettings::colortheme()));
+    KColorScheme scheme(palette().currentColorGroup(), KColorScheme::Window);
     QPalette p = m_view.error_message->palette();
     p.setColor(QPalette::Background, scheme.background(KColorScheme::NegativeBackground).color());
     m_view.error_message->setAutoFillBackground(true);
@@ -438,7 +440,7 @@ void DvdWizardMenu::setTargets(const QStringList &list, const QStringList &targe
         if (targetlist.at(i).contains(QStringLiteral("chapter"))) {
             m_view.target_list->addItem(list.at(i), targetlist.at(i));
         } else {
-            m_view.target_list->addItem(KoIconUtils::themedIcon(QStringLiteral("video-x-generic")), list.at(i), targetlist.at(i));
+            m_view.target_list->addItem(QIcon::fromTheme(QStringLiteral("video-x-generic")), list.at(i), targetlist.at(i));
             movieCount++;
         }
     }

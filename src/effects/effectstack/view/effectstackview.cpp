@@ -26,10 +26,10 @@
 #include "builtstack.hpp"
 #include "collapsibleeffectview.hpp"
 #include "core.h"
-#include "monitor/monitor.h"
 #include "effects/effectstack/model/effectitemmodel.hpp"
 #include "effects/effectstack/model/effectstackmodel.hpp"
 #include "kdenlivesettings.h"
+#include "monitor/monitor.h"
 
 #include <QDrag>
 #include <QDragEnterEvent>
@@ -159,7 +159,7 @@ void EffectStackView::setModel(std::shared_ptr<EffectStackModel> model, const QS
 {
     qDebug() << "MUTEX LOCK!!!!!!!!!!!! setmodel";
     m_mutex.lock();
-    unsetModel();
+    unsetModel(false);
     m_model = model;
     m_sourceFrameSize = frameSize;
     m_effectsTree->setModel(m_model.get());
@@ -173,7 +173,8 @@ void EffectStackView::setModel(std::shared_ptr<EffectStackModel> model, const QS
     qDebug() << "MUTEX UNLOCK!!!!!!!!!!!! setmodel";
     loadEffects();
     connect(m_model.get(), &EffectStackModel::dataChanged, this, &EffectStackView::refresh);
-    //m_builtStack->setModel(model, stackOwner());
+    connect(m_model.get(), &EffectStackModel::enabledStateChanged, this, &EffectStackView::updateEnabledState);
+    // m_builtStack->setModel(model, stackOwner());
 }
 
 void EffectStackView::loadEffects()
@@ -188,8 +189,6 @@ void EffectStackView::loadEffects()
         return;
     }
     int active = qBound(0, m_model->getActiveEffect(), max - 1);
-    std::shared_ptr<AbstractEffectItem> activeItem = m_model->getEffectStackRow(active);
-    std::shared_ptr<EffectItemModel> activeModel = std::static_pointer_cast<EffectItemModel>(activeItem);
     for (int i = 0; i < max; i++) {
         std::shared_ptr<AbstractEffectItem> item = m_model->getEffectStackRow(i);
         QSize size;
@@ -199,34 +198,32 @@ void EffectStackView::loadEffects()
         }
         std::shared_ptr<EffectItemModel> effectModel = std::static_pointer_cast<EffectItemModel>(item);
         CollapsibleEffectView *view = nullptr;
-        if (i >= 0 && i <= max) {
-            // We need to rebuild the effect view
-            QImage effectIcon = m_thumbnailer->requestImage(effectModel->getAssetId(), &size, QSize(QStyle::PM_SmallIconSize, QStyle::PM_SmallIconSize));
-            view = new CollapsibleEffectView(effectModel, m_sourceFrameSize, effectIcon, this);
-            connect(view, &CollapsibleEffectView::deleteEffect, m_model.get(), &EffectStackModel::removeEffect);
-            connect(view, &CollapsibleEffectView::moveEffect, m_model.get(), &EffectStackModel::moveEffect);
-            connect(view, &CollapsibleEffectView::switchHeight, this, &EffectStackView::slotAdjustDelegate, Qt::DirectConnection);
-            connect(view, &CollapsibleEffectView::startDrag, this, &EffectStackView::slotStartDrag);
-            connect(view, &CollapsibleEffectView::createGroup, m_model.get(), &EffectStackModel::slotCreateGroup);
-            connect(view, &CollapsibleEffectView::activateEffect, this, &EffectStackView::slotActivateEffect);
-            connect(view, &CollapsibleEffectView::seekToPos, [this](int pos) {
-                // at this point, the effects returns a pos relative to the clip. We need to convert it to a global time
-                int clipIn = pCore->getItemPosition(m_model->getOwnerId());
-                emit seekToPos(pos + clipIn);
-            });
-            connect(this, &EffectStackView::doActivateEffect, view, &CollapsibleEffectView::slotActivateEffect);
-            QModelIndex ix = m_model->getIndexFromItem(effectModel);
-            m_effectsTree->setIndexWidget(ix, view);
-            WidgetDelegate *del = static_cast<WidgetDelegate *>(m_effectsTree->itemDelegate(ix));
-            del->setHeight(ix, view->height());
-        } else {
-            QModelIndex ix = m_model->getIndexFromItem(effectModel);
-            auto w = m_effectsTree->indexWidget(ix);
-            view = static_cast<CollapsibleEffectView *>(w);
-        }
-        view->slotActivateEffect(m_model->getIndexFromItem(activeModel));
+        // We need to rebuild the effect view
+        QImage effectIcon = m_thumbnailer->requestImage(effectModel->getAssetId(), &size, QSize(QStyle::PM_SmallIconSize, QStyle::PM_SmallIconSize));
+        view = new CollapsibleEffectView(effectModel, m_sourceFrameSize, effectIcon, this);
+        connect(view, &CollapsibleEffectView::deleteEffect, m_model.get(), &EffectStackModel::removeEffect);
+        connect(view, &CollapsibleEffectView::moveEffect, m_model.get(), &EffectStackModel::moveEffect);
+        connect(view, &CollapsibleEffectView::reloadEffect, this, &EffectStackView::reloadEffect);
+        connect(view, &CollapsibleEffectView::switchHeight, this, &EffectStackView::slotAdjustDelegate, Qt::DirectConnection);
+        connect(view, &CollapsibleEffectView::startDrag, this, &EffectStackView::slotStartDrag);
+        connect(view, &CollapsibleEffectView::createGroup, m_model.get(), &EffectStackModel::slotCreateGroup);
+        connect(view, &CollapsibleEffectView::activateEffect, this, &EffectStackView::slotActivateEffect);
+        connect(view, &CollapsibleEffectView::seekToPos, [this](int pos) {
+            // at this point, the effects returns a pos relative to the clip. We need to convert it to a global time
+            int clipIn = pCore->getItemPosition(m_model->getOwnerId());
+            emit seekToPos(pos + clipIn);
+        });
+        connect(this, &EffectStackView::doActivateEffect, view, &CollapsibleEffectView::slotActivateEffect);
+        QModelIndex ix = m_model->getIndexFromItem(effectModel);
+        m_effectsTree->setIndexWidget(ix, view);
+        WidgetDelegate *del = static_cast<WidgetDelegate *>(m_effectsTree->itemDelegate(ix));
+        del->setHeight(ix, view->height());
         view->buttonUp->setEnabled(i > 0);
         view->buttonDown->setEnabled(i < max - 1);
+        if (i == active) {
+            m_model->setActiveEffect(i);
+            emit doActivateEffect(ix);
+        }
     }
     updateTreeHeight();
     qDebug() << "MUTEX UNLOCK!!!!!!!!!!!! loadEffects";
@@ -248,7 +245,7 @@ void EffectStackView::updateTreeHeight()
 
 void EffectStackView::slotActivateEffect(std::shared_ptr<EffectItemModel> effectModel)
 {
-    qDebug() << "MUTEX LOCK!!!!!!!!!!!! slotactivateeffect";
+    qDebug() << "MUTEX LOCK!!!!!!!!!!!! slotactivateeffect: "<<effectModel->row();
     QMutexLocker lock(&m_mutex);
     m_model->setActiveEffect(effectModel->row());
     QModelIndex activeIx = m_model->getIndexFromItem(effectModel);
@@ -280,7 +277,7 @@ void EffectStackView::slotStartDrag(QPixmap pix, std::shared_ptr<EffectItemModel
 
 void EffectStackView::slotAdjustDelegate(std::shared_ptr<EffectItemModel> effectModel, int height)
 {
-    qDebug() << "MUTEX LOCK!!!!!!!!!!!! adjustdelegate: "<<height;
+    qDebug() << "MUTEX LOCK!!!!!!!!!!!! adjustdelegate: " << height;
     QMutexLocker lock(&m_mutex);
     QModelIndex ix = m_model->getIndexFromItem(effectModel);
     WidgetDelegate *del = static_cast<WidgetDelegate *>(m_effectsTree->itemDelegate(ix));
@@ -296,8 +293,8 @@ void EffectStackView::refresh(const QModelIndex &topLeft, const QModelIndex &bot
         loadEffects();
         return;
     }
-    for (int i = topLeft.row(); i <= bottomRight.row(); ++i)  {
-        for (int j = topLeft.column(); j <= bottomRight.column(); ++j)  {
+    for (int i = topLeft.row(); i <= bottomRight.row(); ++i) {
+        for (int j = topLeft.column(); j <= bottomRight.column(); ++j) {
             CollapsibleEffectView *w = static_cast<CollapsibleEffectView *>(m_effectsTree->indexWidget(m_model->index(i, j, topLeft.parent())));
             if (w) {
                 w->refresh();
@@ -309,11 +306,19 @@ void EffectStackView::refresh(const QModelIndex &topLeft, const QModelIndex &bot
 void EffectStackView::unsetModel(bool reset)
 {
     // Release ownership of smart pointer
+    Kdenlive::MonitorId id = Kdenlive::NoMonitor;
     if (m_model) {
+        ObjectId item = m_model->getOwnerId();
+        id = item.first == ObjectType::BinClip ? Kdenlive::ClipMonitor : Kdenlive::ProjectMonitor;
         disconnect(m_model.get(), &EffectStackModel::dataChanged, this, &EffectStackView::refresh);
     }
     if (reset) {
+        QMutexLocker lock(&m_mutex);
         m_model.reset();
+        m_effectsTree->setModel(nullptr);
+    }
+    if (id != Kdenlive::NoMonitor) {
+        pCore->getMonitor(id)->slotShowEffectScene(MonitorSceneDefault);
     }
 }
 
@@ -324,6 +329,35 @@ ObjectId EffectStackView::stackOwner() const
     }
     return ObjectId(ObjectType::NoItem, -1);
 }
+
+void EffectStackView::addEffect(const QString &effectId)
+{
+    if (m_model) {
+        m_model->appendEffect(effectId);
+    }
+}
+
+bool EffectStackView::isEmpty() const
+{
+    return m_model == nullptr ? true : m_model->rowCount() == 0;
+}
+
+
+void EffectStackView::enableStack(bool enable)
+{
+    if (m_model) {
+        m_model->setEffectStackEnabled(enable);
+    }
+}
+
+bool EffectStackView::isStackEnabled() const
+{
+    if (m_model) {
+        return m_model->isStackEnabled();
+    }
+    return false;
+}
+
 
 /*
 void EffectStackView::switchBuiltStack(bool show)

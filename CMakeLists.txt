@@ -4,7 +4,7 @@ project(Kdenlive)
 # stable release. An additional number can be used for bugfix-only releases.
 
 # KDE Application Version, managed by release script
-set (KDE_APPLICATIONS_VERSION_MAJOR "17")
+set (KDE_APPLICATIONS_VERSION_MAJOR "18")
 set (KDE_APPLICATIONS_VERSION_MINOR "11")
 set (KDE_APPLICATIONS_VERSION_MICRO "70")
 
@@ -16,9 +16,12 @@ endif()
 if (POLICY CMP0053)
     cmake_policy(SET CMP0053 NEW)
 endif()
+if(POLICY CMP0071)
+  cmake_policy(SET CMP0071 NEW)
+endif()
 # Minimum versions of main dependencies.
 set(MLT_MIN_MAJOR_VERSION 6)
-set(MLT_MIN_MINOR_VERSION 6)
+set(MLT_MIN_MINOR_VERSION 10)
 set(MLT_MIN_PATCH_VERSION 0)
 set(MLT_MIN_VERSION ${MLT_MIN_MAJOR_VERSION}.${MLT_MIN_MINOR_VERSION}.${MLT_MIN_PATCH_VERSION})
 
@@ -92,13 +95,26 @@ else()
   set(KF5_ICON_COMPATIBILITY TRUE)
 endif()
 
-find_package(KF5 REQUIRED COMPONENTS Archive Bookmarks CoreAddons Config ConfigWidgets DBusAddons KIO WidgetsAddons NotifyConfig NewStuff XmlGui Notifications GuiAddons TextWidgets IconThemes Crash Declarative Solid OPTIONAL_COMPONENTS DocTools FileMetaData)
+find_package(KF5 REQUIRED COMPONENTS Archive Bookmarks CoreAddons Config ConfigWidgets
+                            DBusAddons KIO WidgetsAddons NotifyConfig NewStuff XmlGui Notifications GuiAddons TextWidgets IconThemes
+                            Declarative Solid
+                 OPTIONAL_COMPONENTS DocTools FileMetaData Crash Purpose)
+if(WIN32)
+    find_package(DrMinGW)
+endif(WIN32)
 
 if (KF5FileMetaData_FOUND)
   message(STATUS "Found KF5 FileMetadata to extract file metadata")
   set(KF5_FILEMETADATA TRUE)
 else()
   message(STATUS "KF5 FileMetadata not found, file metadata will not be available")
+endif()
+
+if (KF5Purpose_FOUND)
+  message(STATUS "Found KF5 Purpose, filesharing enabled")
+  set(KF5_PURPOSE TRUE)
+else()
+  message(STATUS "KF5 Purpose not found, filesharing disabled")
 endif()
 
 # Search MLT package.
@@ -116,7 +132,6 @@ if(KF5DocTools_FOUND)
     add_subdirectory(doc)
 endif()
 #add_subdirectory(plugins)
-ecm_optional_add_subdirectory(po)
 add_subdirectory(renderer)
 add_subdirectory(src)
 add_subdirectory(thumbnailer)
@@ -140,6 +155,7 @@ if (BUILD_TESTS)
         src
         )
     ADD_EXECUTABLE(runTests ${Tests_SRCS})
+    set_property(TARGET runTests PROPERTY CXX_STANDARD 14)
     target_link_libraries(runTests kdenliveLib)
     ADD_TEST(runTests runTests -d yes)
 else()
@@ -147,7 +163,10 @@ else()
 endif()
 
 #add_subdirectory(testingArea)
-
+ki18n_install(po)
+if (KF5DocTools_FOUND)
+ kdoctools_install(po)
+endif()
 
 install( FILES kdenlive.categories DESTINATION ${KDE_INSTALL_CONFDIR} )
 

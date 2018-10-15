@@ -21,14 +21,16 @@
 
 #include "effectsrepository.hpp"
 #include "core.h"
+#include "kdenlivesettings.h"
+#include "profiles/profilemodel.hpp"
 #include "xml/xml.hpp"
+
+#include <mlt++/Mlt.h>
 #include <QDir>
 #include <QFile>
 #include <QStandardPaths>
 #include <QTextStream>
-
-#include "profiles/profilemodel.hpp"
-#include <mlt++/Mlt.h>
+#include <KLocalizedString>
 
 std::unique_ptr<EffectsRepository> EffectsRepository::instance;
 std::once_flag EffectsRepository::m_onceFlag;
@@ -37,11 +39,42 @@ EffectsRepository::EffectsRepository()
     : AbstractAssetsRepository<EffectType>()
 {
     init();
+    // Check that our favorite effects are valid
+    QStringList invalidEffect;
+    for (const QString &effect : KdenliveSettings::favorite_effects()) {
+        if (!exists(effect)) {
+            invalidEffect << effect;
+        }
+    }
+    if (!invalidEffect.isEmpty()) {
+        pCore->displayMessage(i18n("Some of your favorite effects are invalid and were removed: %1", invalidEffect.join(QLatin1Char(','))), ErrorMessage);
+        QStringList newFavorites = KdenliveSettings::favorite_effects();
+        for (const QString &effect : invalidEffect) {
+            newFavorites.removeAll(effect);
+        }
+        KdenliveSettings::setFavorite_effects(newFavorites);
+    }
 }
 
 Mlt::Properties *EffectsRepository::retrieveListFromMlt()
 {
     return pCore->getMltRepository()->filters();
+}
+
+void EffectsRepository::parseFavorites()
+{
+    m_favorites = KdenliveSettings::favorite_effects().toSet();
+}
+
+void EffectsRepository::setFavorite(const QString &id, bool favorite)
+{
+    Q_ASSERT(exists(id));
+    if (favorite) {
+        m_favorites << id;
+    } else {
+        m_favorites.remove(id);
+    }
+    KdenliveSettings::setFavorite_effects(QStringList::fromSet(m_favorites));
 }
 
 Mlt::Properties *EffectsRepository::getMetadata(const QString &effectId)
@@ -63,7 +96,6 @@ void EffectsRepository::parseCustomAssetFile(const QString &file_name, std::unor
         info.type = EffectType::Custom;
         QString tag = base.attribute(QStringLiteral("tag"), QString());
         QString id = base.hasAttribute(QStringLiteral("id")) ? base.attribute(QStringLiteral("id")) : tag;
-
         QString name = base.attribute(QStringLiteral("name"), QString());
         info.name = name;
         info.id = id;
@@ -94,7 +126,6 @@ void EffectsRepository::parseCustomAssetFile(const QString &file_name, std::unor
         if (!ok) {
             continue;
         }
-
         if (customAssets.count(result.id) > 0) {
             qDebug() << "Warning: duplicate custom definition of effect" << result.id << "found. Only last one will be considered";
         }
@@ -107,6 +138,8 @@ void EffectsRepository::parseCustomAssetFile(const QString &file_name, std::unor
             result.type = EffectType::Audio;
         } else if (type == QLatin1String("custom")) {
             result.type = EffectType::Custom;
+        } else if (type == QLatin1String("hidden")) {
+            result.type = EffectType::Hidden;
         } else {
             result.type = EffectType::Video;
         }
@@ -129,7 +162,6 @@ QStringList EffectsRepository::assetDirs() const
 void EffectsRepository::parseType(QScopedPointer<Mlt::Properties> &metadata, Info &res)
 {
     res.type = EffectType::Video;
-
     Mlt::Properties tags((mlt_properties)metadata->get_data("tags"));
     if (QString(tags.get(0)) == QLatin1String("Audio")) {
         res.type = EffectType::Audio;
@@ -148,4 +180,19 @@ Mlt::Filter *EffectsRepository::getEffect(const QString &effectId) const
     // We create the Mlt element from its name
     Mlt::Filter *filter = new Mlt::Filter(pCore->getCurrentProfile()->profile(), service_name.toLatin1().constData(), nullptr);
     return filter;
+}
+
+QPair <QString, QString> EffectsRepository::reloadCustom(const QString &path)
+{
+    std::unordered_map<QString, Info> customAssets;
+    parseCustomAssetFile(path, customAssets);
+    QPair <QString, QString> result;
+    //TODO: handle files with several effects
+    for (const auto &custom : customAssets) {
+        // Custom assets should override default ones
+        m_assets[custom.first] = custom.second;
+        result.first = custom.first;
+        result.second = custom.second.mltId;
+    }
+    return result;
 }

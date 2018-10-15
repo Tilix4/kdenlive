@@ -18,7 +18,7 @@
  ***************************************************************************/
 
 #include "dragvalue.h"
-#include "utils/KoIconUtils.h"
+
 
 #include "kdenlivesettings.h"
 
@@ -77,8 +77,8 @@ DragValue::DragValue(const QString &label, double defaultValue, int decimals, do
         m_intEdit->setRange((int)m_minimum, (int)m_maximum);
         m_intEdit->setValue((int)m_default);
         l->addWidget(m_intEdit);
-        connect(m_intEdit, static_cast<void(QSpinBox::*)(int)>(&QSpinBox::valueChanged),
-                this, static_cast<void(DragValue::*)(int)>(&DragValue::slotSetValue));
+        connect(m_intEdit, static_cast<void (QSpinBox::*)(int)>(&QSpinBox::valueChanged), this,
+                static_cast<void (DragValue::*)(int)>(&DragValue::slotSetValue));
         connect(m_intEdit, &QAbstractSpinBox::editingFinished, this, &DragValue::slotEditingFinished);
     } else {
         m_doubleEdit = new QDoubleSpinBox(this);
@@ -127,18 +127,18 @@ DragValue::DragValue(const QString &label, double defaultValue, int decimals, do
     m_directUpdate->setChecked(KdenliveSettings::dragvalue_directupdate());
     m_menu->addAction(m_directUpdate);
 
-    QAction *reset = new QAction(KoIconUtils::themedIcon(QStringLiteral("edit-undo")), i18n("Reset value"), this);
+    QAction *reset = new QAction(QIcon::fromTheme(QStringLiteral("edit-undo")), i18n("Reset value"), this);
     connect(reset, &QAction::triggered, this, &DragValue::slotReset);
     m_menu->addAction(reset);
 
     if (m_id > -1) {
-        QAction *timeline = new QAction(KoIconUtils::themedIcon(QStringLiteral("go-jump")), i18n("Show %1 in timeline", label), this);
+        QAction *timeline = new QAction(QIcon::fromTheme(QStringLiteral("go-jump")), i18n("Show %1 in timeline", label), this);
         connect(timeline, &QAction::triggered, this, &DragValue::slotSetInTimeline);
         connect(m_label, &CustomLabel::setInTimeline, this, &DragValue::slotSetInTimeline);
         m_menu->addAction(timeline);
     }
     connect(this, &QWidget::customContextMenuRequested, this, &DragValue::slotShowContextMenu);
-    connect(m_scale, static_cast<void(KSelectAction::*)(int)>(&KSelectAction::triggered), this, &DragValue::slotSetScaleMode);
+    connect(m_scale, static_cast<void (KSelectAction::*)(int)>(&KSelectAction::triggered), this, &DragValue::slotSetScaleMode);
     connect(m_directUpdate, &QAction::triggered, this, &DragValue::slotSetDirectUpdate);
 }
 
@@ -205,7 +205,7 @@ qreal DragValue::value() const
 
 void DragValue::setMaximum(qreal max)
 {
-    if (m_maximum != max) {
+    if (!qFuzzyCompare(m_maximum, max)) {
         m_maximum = max;
         if (m_intEdit) {
             m_intEdit->setRange(m_minimum, m_maximum);
@@ -217,7 +217,7 @@ void DragValue::setMaximum(qreal max)
 
 void DragValue::setMinimum(qreal min)
 {
-    if (m_minimum != min) {
+    if (!qFuzzyCompare(m_minimum, min)) {
         m_minimum = min;
         if (m_intEdit) {
             m_intEdit->setRange(m_minimum, m_maximum);
@@ -400,7 +400,7 @@ CustomLabel::CustomLabel(const QString &label, bool showSlider, int range, QWidg
     setFormat(QLatin1Char(' ') + label);
     setFocusPolicy(Qt::StrongFocus);
     setCursor(Qt::PointingHandCursor);
-    setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::Maximum);
+    setSizePolicy(QSizePolicy::MinimumExpanding, QSizePolicy::Preferred);
     if (showSlider) {
         setRange(0, 1000);
     } else {
@@ -450,12 +450,12 @@ void CustomLabel::mouseMoveEvent(QMouseEvent *e)
                 }
 
                 double nv = value() + diff * m_step;
-                if (nv != value()) {
+                if (!qFuzzyCompare(nv, value())) {
                     setNewValue(nv, KdenliveSettings::dragvalue_directupdate());
                 }
             } else {
                 double nv = minimum() + ((double)maximum() - minimum()) / width() * e->pos().x();
-                if (nv != value()) {
+                if (!qFuzzyCompare(nv, value())) {
                     setNewValue(nv, KdenliveSettings::dragvalue_directupdate());
                 }
             }
